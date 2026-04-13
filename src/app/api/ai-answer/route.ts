@@ -10,7 +10,10 @@ export async function POST(req: Request) {
     }
 
     // Force grab process.env or fallback to literal if missed by Next HMR cache
-    const apiKey = process.env.NVIDIA_KEY || "REDACTED_KEY";
+    const apiKey = process.env.NVIDIA_KEY;
+    if (!apiKey) {
+      return new Response('NVIDIA_KEY environment variable is not set', { status: 500 });
+    }
 
     const nvidiaClient = createOpenAI({
       baseURL: 'https://integrate.api.nvidia.com/v1',
