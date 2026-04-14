@@ -1,43 +1,80 @@
 import FlexSearch from 'flexsearch';
-import { getAllPages } from './storage.js';
+import { getPagesChunk } from './storage.js';
+import { sql } from './db.js';
 
 // ─── Index setup ──────────────────────────────────────────────────────────────
 
 let index: any = null;
+const contentCache = new Map<string, string>();
+
+export function addDocumentToIndex(doc: { url: string, title: string, description: string, source: string, content?: string }) {
+  const searchIndex = getIndex();
+  searchIndex.add({
+    url:         doc.url,
+    title:       doc.title,
+    description: doc.description,
+    source:      doc.source,
+  });
+  if (doc.content) {
+    contentCache.set(doc.url, doc.content.substring(0, 1000));
+  }
+}
+
+function createIndex() {
+  return new FlexSearch.Document({
+    document: {
+      id: 'url',
+      // ONLY index small fields — content would consume multiple GB of RAM
+      index: [
+        { field: 'title',       tokenize: 'forward' },
+        { field: 'description', tokenize: 'forward' },
+        { field: 'source',      tokenize: 'strict'  },
+      ],
+      // Store essential display fields in-memory
+      store: ['url', 'title', 'description', 'source'],
+    },
+  });
+}
 
 export function getIndex() {
-  if (!index) {
-    index = new FlexSearch.Document({
-      tokenize: 'full',
-      cache: 100,
-      document: {
-        id: 'url',
-        index: [
-          { field: 'title',        tokenize: 'full' },
-          { field: 'description',  tokenize: 'full' },
-          { field: 'content',      tokenize: 'full' },
-          { field: 'codeSnippets', tokenize: 'full' },
-        ],
-        store: ['url', 'title', 'description', 'content'],
-      },
-    });
-  }
+  if (!index) index = createIndex();
   return index;
 }
 
 export async function syncIndex() {
-  const searchIndex = getIndex();
-  const pages = await getAllPages();
-  for (const page of pages) {
-    searchIndex.add({
-      url:          page.url,
-      title:        page.title        || '',
-      description:  page.description  || '',
-      content:      page.content      || '',
-      codeSnippets: page.codeSnippets || '',
-    });
+  // Always rebuild a fresh index to avoid stale data from hot-reloads
+  index = createIndex();
+  const searchIndex = index;
+
+  const countRes = await sql`SELECT count(*) as c FROM pages`;
+  const total = Number(countRes[0].c);
+
+  console.log(`\n📚 Syncing index: ${total} pages...`);
+
+  const CHUNK_SIZE = 1000;
+  let offset = 0;
+  let synced = 0;
+
+  while (offset < total) {
+    const rows = await getPagesChunk(offset, CHUNK_SIZE);
+    if (rows.length === 0) break;
+
+    for (const page of rows) {
+      addDocumentToIndex({
+        url:         page.url,
+        title:       page.title       || '',
+        description: page.description || '',
+        source:      page.source      || '',
+        content:     page.content     || '',
+      });
+    }
+
+    synced += rows.length;
+    offset  += CHUNK_SIZE;
+    console.log(`   ✓ ${synced}/${total} indexed`);
   }
-  console.log(`Synced ${pages.length} pages to FlexSearch index.`);
+
+  console.log(`✅ Index ready: ${synced} pages loaded.\n`);
 }
 
 // ─── Relevance Ranker ─────────────────────────────────────────────────────────
@@ -56,37 +93,22 @@ function countOccurrences(text: string, term: string): number {
 
 /**
  * Multi-signal relevance scorer.
- * Called after FlexSearch produces a candidate set — this re-ranks by
- * text-level signals that FlexSearch doesn't compute.
- *
- * Signals (additive):
- *  +50  Exact query phrase in title
- *  +20  Exact query phrase in description
- *  +10  Exact query phrase in content
- *  +15 × n  Each occurrence of a query term in the title (capped at 3)
- *  +8  × n  Each occurrence of a query term in the description (capped at 3)
- *  +2  × n  Each occurrence of a query term in the content (capped at 5)
- *  +8  Each query term found in the URL (e.g. /react-hooks/)
- *  +20 Title coverage: (query terms present in title) / (total query terms) × 20
- *  +15 Description coverage
- *  +30 Title starts with query phrase
- *  +10 Title ends with query phrase
- *  −5  Content is very short (< 80 chars) — likely a stub or nav page
- *  −3  Title contains boilerplate words (e.g. "login", "sign up", "404")
+ * doc only stores: url, title, description (in-memory).
+ * content is fetched from DB and passed in separately for scoring signals.
  */
-function scoreDoc(doc: any, queryTerms: string[], rawQuery: string): number {
-  const title   = (doc.title       || '').toLowerCase();
-  const desc    = (doc.description || '').toLowerCase();
-  const content = (doc.content     || '').toLowerCase();
-  const url     = (doc.url         || '').toLowerCase();
-  const q       = rawQuery.toLowerCase().trim();
+function scoreDoc(doc: any, queryTerms: string[], rawQuery: string, content: string = ''): number {
+  const title = (doc.title       || '').toLowerCase();
+  const desc  = (doc.description || '').toLowerCase();
+  const body  = content.toLowerCase();
+  const url   = (doc.url         || '').toLowerCase();
+  const q     = rawQuery.toLowerCase().trim();
 
   let score = 0;
 
   // ── Exact phrase bonuses ────────────────────────────────────────────────
-  if (title.includes(q))   score += 50;
-  if (desc.includes(q))    score += 20;
-  if (content.includes(q)) score += 10;
+  if (title.includes(q)) score += 50;
+  if (desc.includes(q))  score += 20;
+  if (body.includes(q))  score += 10;
 
   // ── Title position bonuses ──────────────────────────────────────────────
   if (title.startsWith(q)) score += 30;
@@ -95,20 +117,13 @@ function scoreDoc(doc: any, queryTerms: string[], rawQuery: string): number {
   // ── Per-term scoring ────────────────────────────────────────────────────
   for (const term of queryTerms) {
     if (term.length < 2) continue;
-
-    const tInTitle   = Math.min(countOccurrences(title, term), 3);
-    const tInDesc    = Math.min(countOccurrences(desc, term),  3);
-    const tInContent = Math.min(countOccurrences(content, term), 5);
-
-    score += tInTitle   * 15;
-    score += tInDesc    *  8;
-    score += tInContent *  2;
-
-    // URL keyword match (e.g. "/react-hooks/", "react" in hostname)
+    score += Math.min(countOccurrences(title, term), 3) * 15;
+    score += Math.min(countOccurrences(desc, term),  3) * 8;
+    score += Math.min(countOccurrences(body, term),  5) * 2;
     if (url.includes(term)) score += 8;
   }
 
-  // ── Term coverage ratios ────────────────────────────────────────────────
+  // ── Coverage ratios ─────────────────────────────────────────────────────
   const meaningful = queryTerms.filter(t => t.length >= 2);
   if (meaningful.length > 0) {
     const titleCov = meaningful.filter(t => title.includes(t)).length / meaningful.length;
@@ -118,11 +133,20 @@ function scoreDoc(doc: any, queryTerms: string[], rawQuery: string): number {
   }
 
   // ── Penalties ───────────────────────────────────────────────────────────
-  const contentLen = (doc.content || '').length;
-  if (contentLen < 80) score -= 5;  // Stub / nav page
-
   const BOILERPLATE = ['login', 'sign up', 'signup', '404', 'not found', 'cookie', 'privacy policy'];
   if (BOILERPLATE.some(b => title.includes(b))) score -= 3;
+
+  // ── Domain Authority Boost ──────────────────────────────────────────────
+  const TRUSTED = [
+    'typescriptlang.org', 'react.dev', 'nextjs.org', 'nodejs.org',
+    'developer.mozilla.org', 'docs.python.org', 'go.dev', 'rust-lang.org',
+    'vuejs.org', 'svelte.dev', 'angular.dev', 'postgresql.org',
+    'docs.docker.com', 'kubernetes.io', 'fastapi.tiangolo.com',
+    'docs.djangoproject.com', 'flask.palletsprojects.com', 'docs.nestjs.com',
+    'www.prisma.io', 'tailwindcss.com', 'jestjs.io', 'vitest.dev',
+    'playwright.dev', 'redux-toolkit.js.org', 'trpc.io', 'zod.dev',
+  ];
+  if (TRUSTED.some(d => url.includes(d))) score += 50;
 
   return score;
 }
@@ -139,43 +163,55 @@ function scoreDoc(doc: any, queryTerms: string[], rawQuery: string): number {
  *  4. Sorted by final score, top 10 returned
  */
 export async function search(query: string): Promise<any[]> {
+  const t0 = Date.now();
   const searchIndex = getIndex();
   const trimmedQuery = query.trim();
   if (!trimmedQuery) return [];
 
-  // Normalise query terms (lowercase, split on whitespace, dedupe)
   const queryTerms = [...new Set(
     trimmedQuery.toLowerCase().split(/\s+/).filter(t => t.length >= 2)
   )];
 
-  // Step 1 — FlexSearch candidate retrieval
+  // Step 1 — FlexSearch candidate retrieval (title + description only)
   const raw: any[] = await searchIndex.search(trimmedQuery, {
-    limit: 40,         // wider net; re-ranker will trim to 10
+    limit: 40,
     enrich: true,
     suggest: true,
   });
+  const t1 = Date.now();
 
-  // Step 2 — Merge across field layers (deduplicate by URL, keep doc)
-  const candidates = new Map<string, any>(); // url → doc
+  // Step 2 — Merge across field layers, deduplicate by URL
+  const candidates = new Map<string, any>(); // url → stored doc
   for (const layer of raw) {
     for (const hit of (layer.result || [])) {
       const url = hit.id as string;
       if (url && !candidates.has(url)) {
-        candidates.set(url, hit.doc);
+        candidates.set(url, hit.doc ?? { url });
       }
     }
   }
 
   if (candidates.size === 0) return [];
 
-  // Step 3 — Score each candidate
+  // Step 3 — Fetch full content from memory cache for top candidates (for scoring only)
+  const urls = Array.from(candidates.keys());
+  let contentMap: Record<string, string> = {};
+  
+  for (const url of urls) {
+    contentMap[url] = contentCache.get(url) || '';
+  }
+
+  const t2 = Date.now();
+
+  // Step 4 — Score each candidate
   const scored = Array.from(candidates.entries()).map(([url, doc]) => ({
-    doc: { ...doc, url: doc?.url ?? url }, // ensure url always on doc
-    score: scoreDoc(doc, queryTerms, trimmedQuery),
+    doc: { ...doc, url: doc?.url ?? url },
+    score: scoreDoc(doc, queryTerms, trimmedQuery, contentMap[url] || ''),
   }));
 
-  // Step 4 — Sort + return top 10
+  // Step 5 — Sort and return top 10
   scored.sort((a, b) => b.score - a.score);
-
+  const t3 = Date.now();
+  console.log(`Search trace for "${query}": FlexSearch=${t1-t0}ms, MapMerge=${t2-t1}ms, Scoring=${t3-t2}ms, Total=${t3-t0}ms`);
   return scored.slice(0, 10).map(({ doc }) => doc);
 }
