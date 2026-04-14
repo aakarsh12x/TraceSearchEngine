@@ -9,7 +9,7 @@ export async function GET(request: Request) {
   }
 
   try {
-    const response = await fetch(`http://localhost:3001/search?q=${encodeURIComponent(query)}`);
+    const response = await fetch(`http://127.0.0.1:3001/search?q=${encodeURIComponent(query)}`);
     if (!response.ok) throw new Error('Backend search failed');
 
     const data = await response.json();
@@ -52,7 +52,7 @@ export async function POST(request: Request) {
     const body = await request.json().catch(() => ({}));
     const seedUrl = body.seedUrl || 'https://nextjs.org/docs';
     
-    const response = await fetch('http://localhost:3001/crawler/start', {
+    const response = await fetch('http://127.0.0.1:3001/crawler/start', {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ seedUrl })
