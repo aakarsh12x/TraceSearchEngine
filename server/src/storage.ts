@@ -27,6 +27,29 @@ export async function getAllPages() {
 }
 
 /**
+ * Fetches a chunk of pages from the Neon database.
+ */
+export async function getPagesChunk(offset: number, limit: number) {
+  try {
+    const rows = await sql`SELECT * FROM pages ORDER BY id ASC LIMIT ${limit} OFFSET ${offset}`;
+    return rows.map((r: any) => ({
+      url: r.url,
+      title: r.title,
+      content: r.content,
+      codeSnippets: r.code_snippets,
+      description: r.description,
+      source: r.source ?? '',
+      tags: r.tags ?? '',
+      contentHash: r.content_hash ?? '',
+      lastCrawled: r.last_crawled?.toISOString?.() ?? ''
+    }));
+  } catch (err) {
+    console.error('Failed to get pages chunk from DB:', err);
+    return [];
+  }
+}
+
+/**
  * Clears all pages from the Neon database.
  */
 export async function clearStorage() {
