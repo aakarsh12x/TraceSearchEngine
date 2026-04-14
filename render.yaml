@@ -1,0 +1,38 @@
+services:
+  # ── Express Search Backend ──────────────────────────────────────────────────
+  - type: web
+    name: trace-backend
+    runtime: node
+    rootDir: server
+    buildCommand: npm install && npm run build
+    startCommand: npm start
+    envVars:
+      - key: DATABASE_URL
+        sync: false
+      - key: PORT
+        value: 3001
+    healthCheckPath: /health
+
+  # ── Next.js Frontend ────────────────────────────────────────────────────────
+  - type: web
+    name: trace-frontend
+    runtime: node
+    rootDir: src
+    buildCommand: npm install && npm run build
+    startCommand: npm start
+    envVars:
+      - key: NVIDIA_KEY
+        sync: false
+
+# ── Keep-alive cron jobs (prevents free-tier sleep after 15 min inactivity) ──
+crons:
+  - name: keep-backend-alive
+    schedule: "*/14 * * * *"
+    # Render cron jobs run a shell command; we use curl to ping the health endpoint.
+    # Replace the URL with your actual Render backend service URL after first deploy.
+    command: "curl -fs https://trace-backend.onrender.com/health || true"
+
+  - name: keep-frontend-alive
+    schedule: "*/14 * * * *"
+    # Replace the URL with your actual Render frontend service URL after first deploy.
+    command: "curl -fs https://trace-frontend.onrender.com/ || true"

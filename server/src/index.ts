@@ -14,6 +14,11 @@ app.get("/", (req, res) => {
   res.send("Search Engine Backend Running");
 });
 
+// Keep-alive health check — pinged by Render cron job every 14 minutes
+app.get("/health", (req, res) => {
+  res.json({ status: "ok", uptime: process.uptime(), timestamp: new Date().toISOString() });
+});
+
 app.get("/search", async (req, res) => {
   try {
     const query = req.query.q as string;
