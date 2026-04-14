@@ -279,10 +279,10 @@ export default function Home() {
       </AnimatePresence>
 
       {/* ── PAGE BODY ──────────────────────────────────────────────────── */}
-      <div className="relative z-10 flex flex-col items-center px-4 w-full min-h-screen justify-center">
+      <div className={`relative z-10 flex flex-col items-center px-4 w-full min-h-screen ${isResultsMode ? 'justify-start' : 'justify-center'}`}>
 
         {/* HERO */}
-        <AnimatePresence>
+        <AnimatePresence mode="popLayout">
           {!isResultsMode && (
             <motion.div
               key="hero"
@@ -342,7 +342,7 @@ export default function Home() {
                 initial={{ opacity: 0, y: 10 }}
                 animate={{ opacity: 1, y: 0 }}
                 exit={{ opacity: 0, y: 6 }}
-                transition={{ duration: 0.25, ease: EASE }}
+                transition={{ duration: 0.35, ease: 'easeOut', delay: 0.05 }}
                 className="w-full mt-4 relative z-10"
                 style={{ willChange: 'opacity, transform' }}
               >
