@@ -10,10 +10,31 @@ body {
   -webkit-font-smoothing: antialiased;
   overflow-x: hidden;
   margin: 0;
-  /* Hide scrollbar globally */
-  scrollbar-width: none;
 }
-body::-webkit-scrollbar { display: none; }
+
+/* ─── Custom Theme Scrollbars ───────────────────────────────────────────── */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: #27272a transparent;
+}
+
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #27272a;
+  border-radius: 10px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #3f3f46;
+}
 
 /* ─── Meteor animation ───────────────────────────────────────────────────── */
 @keyframes meteor-fall {
@@ -79,6 +100,7 @@ body::-webkit-scrollbar { display: none; }
   display: -webkit-box;
   -webkit-line-clamp: 2;
   -webkit-box-orient: vertical;
+  line-clamp: 2;
   overflow: hidden;
 }
 /* ─── Shimmer Button Animations ────────────────────────────────────────── */
@@ -111,20 +133,23 @@ body::-webkit-scrollbar { display: none; }
   animation: shimmer-slide var(--speed) inherit;
 }
 
-/* ─── No-scrollbar utility (hide visually, keep scroll) ─────────────────── */
-.no-scrollbar {
-  scrollbar-width: none;        /* Firefox */
-  -ms-overflow-style: none;     /* IE / Edge */
-}
-.no-scrollbar::-webkit-scrollbar {
-  display: none;                /* Chrome / Safari / Opera */
+/* ─── Custom Scrollbar utility ─────────────────── */
+.no-scrollbar, .scrollbar-thin {
+  scrollbar-width: thin;
+  scrollbar-color: #27272a transparent;
 }
 
-/* Keep .scrollbar-thin as alias for no-scrollbar so existing classes still work */
-.scrollbar-thin {
-  scrollbar-width: none;
-  -ms-overflow-style: none;
+.no-scrollbar::-webkit-scrollbar, .scrollbar-thin::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
 }
-.scrollbar-thin::-webkit-scrollbar {
-  display: none;
+.no-scrollbar::-webkit-scrollbar-track, .scrollbar-thin::-webkit-scrollbar-track {
+  background: transparent;
+}
+.no-scrollbar::-webkit-scrollbar-thumb, .scrollbar-thin::-webkit-scrollbar-thumb {
+  background: #27272a;
+  border-radius: 10px;
+}
+.no-scrollbar::-webkit-scrollbar-thumb:hover, .scrollbar-thin::-webkit-scrollbar-thumb:hover {
+  background: #3f3f46;
 }
