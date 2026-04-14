@@ -7,6 +7,7 @@ import { useCompletion } from '@ai-sdk/react';
 import ReactMarkdown from 'react-markdown';
 import { Terminal } from '@/components/ui/terminal';
 import { ShimmerButton } from '@/components/ui/shimmer-button';
+import { TextAnimate } from '@/components/ui/text-animate';
 
 // ─── Icons ───────────────────────────────────────────────────────────────────
 
@@ -86,8 +87,9 @@ function SearchInput({
         onFocus={onFocus}
         onBlur={onBlur}
         placeholder={compact ? 'Search or ask anything…' : 'Ask anything (Press ↵ for AI)…'}
-        className="w-full outline-none transition-colors duration-150"
+        className="w-full outline-none"
         style={{
+          transition: 'all 0.85s cubic-bezier(0.22, 1, 0.36, 1)',
           borderRadius: '0.75rem',
           fontSize: compact ? '0.875rem' : '1rem',
           paddingLeft: '2.6rem',
@@ -123,16 +125,15 @@ function SearchInput({
 // ─── Main ─────────────────────────────────────────────────────────────────────
 
 export default function Home() {
-  const [query, setQuery]               = useState('');
-  const [results, setResults]           = useState<any[]>([]);
+  const [query, setQuery] = useState('');
+  const [results, setResults] = useState<any[]>([]);
   const [isLoadingResults, setIsLoadingResults] = useState(false);
-  const [hasSearched, setHasSearched]   = useState(false);
-  const [isFocused, setIsFocused]       = useState(false);
+  const [hasSearched, setHasSearched] = useState(false);
+  const [isFocused, setIsFocused] = useState(false);
   const [isAITriggered, setIsAITriggered] = useState(false);
 
-  // Only move to results mode when user explicitly triggers AI (Enter / button)
-  // Typing alone does NOT move the navbar up
-  const isResultsMode = isAITriggered;
+  // Smoothly morph to results mode as soon as they type or trigger search (Google-style)
+  const isResultsMode = isAITriggered || hasSearched || query.trim().length > 0;
 
   const { completion, complete, isLoading: isAILoading, setCompletion } = useCompletion({
     api: '/api/ai-answer',
@@ -154,7 +155,7 @@ export default function Home() {
       setHasSearched(true);
       setIsLoadingResults(true);
       try {
-        const res  = await fetch(`/api/search?q=${encodeURIComponent(query)}`);
+        const res = await fetch(`/api/search?q=${encodeURIComponent(query)}`);
         const data = await res.json();
         setResults((data.results || []).filter((r: any) => r?.url));
       } catch (err) {
@@ -175,7 +176,7 @@ export default function Home() {
     setIsLoadingResults(true);
     let cur: any[] = [];
     try {
-      const res  = await fetch(`/api/search?q=${encodeURIComponent(query)}`);
+      const res = await fetch(`/api/search?q=${encodeURIComponent(query)}`);
       const data = await res.json();
       cur = (data.results || []).filter((r: any) => r?.url);
       setResults(cur);
@@ -232,7 +233,7 @@ export default function Home() {
             animate={{ opacity: 1, y: 0 }}
             exit={{ opacity: 0, y: -10 }}
             transition={{ duration: 0.18, ease: EASE }}
-            className="fixed top-0 left-0 right-0 z-50 flex items-center gap-4 px-6 py-3 border-b"
+            className="fixed top-0 left-0 right-0 z-50 flex items-center px-6 py-3 border-b"
             style={{
               backgroundColor: 'rgba(9,9,11,0.92)',
               backdropFilter: 'blur(18px)',
@@ -240,25 +241,48 @@ export default function Home() {
               willChange: 'opacity, transform',
             }}
           >
-            <span
-              className="text-xl font-semibold shrink-0 select-none"
-              style={{ fontFamily: "'Audiowide', cursive", color: '#fafafa', letterSpacing: '-0.02em' }}
-            >
-              Trace
-            </span>
+            {/* Left: logo */}
+            <motion.div layoutId="trace-logo" transition={{ duration: 0.85, ease: [0.22, 1, 0.36, 1] }} className="w-auto min-w-[6rem] shrink-0">
+              <span
+                className="text-xl font-semibold select-none"
+                style={{ fontFamily: "'Audiowide', cursive", color: '#fafafa', letterSpacing: '-0.02em' }}
+              >
+                Trace
+              </span>
+            </motion.div>
 
-            <div className="flex-1 max-w-2xl">
-              <SearchInput {...inputProps} compact />
+            {/* Center: search bar */}
+            <motion.div layoutId="search-container" transition={{ duration: 0.85, ease: [0.22, 1, 0.36, 1] }} className="flex-1 flex justify-center">
+              <div className="w-full max-w-2xl">
+                <SearchInput {...inputProps} compact autoFocus />
+              </div>
+            </motion.div>
+
+            {/* Right: NIM GPT ACTIVE badge */}
+            <div className="w-auto min-w-[6rem] shrink-0 flex justify-end">
+                <span
+                  className="px-2.5 py-1 rounded-full text-[10px] font-medium border whitespace-nowrap"
+                  style={{
+                    backgroundColor: '#18181b',
+                    borderColor: '#27272a',
+                    color: '#71717a',
+                    fontFamily: "'Geist Mono', monospace",
+                    letterSpacing: '0.08em',
+                  }}
+                >
+                  <span className="inline-block w-1.5 h-1.5 rounded-full bg-emerald-500 mr-1.5 align-middle shadow-[0_0_8px_rgba(16,185,129,0.8)]" />
+                  NIM GPT
+                </span>
             </div>
           </motion.header>
         )}
       </AnimatePresence>
 
       {/* ── PAGE BODY ──────────────────────────────────────────────────── */}
-      <div className="relative z-10 flex flex-col items-center px-4 pt-20 pb-20 w-full">
+      <div className="relative z-10 flex flex-col items-center px-4 w-full min-h-screen justify-center">
 
         {/* HERO */}
-        <AnimatePresence mode="wait">
+        <AnimatePresence>
           {!isResultsMode && (
             <motion.div
               key="hero"
@@ -285,70 +309,35 @@ export default function Home() {
                 </span>
               </div>
 
-              <h1
-                className="text-6xl font-semibold tracking-tight mb-3"
-                style={{ color: '#fafafa', letterSpacing: '-0.03em', fontFamily: "'Audiowide', cursive" }}
-              >
-                Trace
-              </h1>
+              <motion.div layoutId="trace-logo" transition={{ duration: 0.85, ease: [0.22, 1, 0.36, 1] }}>
+                <TextAnimate
+                  as="h1"
+                  animation="blurInUp"
+                  by="character"
+                  once={true}
+                  className="text-6xl font-semibold tracking-tight mb-3"
+                  style={{ color: '#fafafa', letterSpacing: '-0.03em', fontFamily: "'Audiowide', cursive" }}
+                >
+                  Trace
+                </TextAnimate>
+              </motion.div>
               <p className="text-sm mb-8" style={{ color: '#52525b' }}>
-                Index the web. Find anything instantly.
+                Search engine for developers by a developer
               </p>
 
-              <SearchInput {...inputProps} autoFocus />
-
-              {/* Typing-search results: float below the hero search bar */}
-              <AnimatePresence>
-                {!isResultsMode && results.length > 0 && (
-                  <motion.div
-                    key="hero-results"
-                    initial={{ opacity: 0, y: 6 }}
-                    animate={{ opacity: 1, y: 0 }}
-                    exit={{ opacity: 0, y: 4 }}
-                    transition={{ duration: 0.18, ease: EASE }}
-                    className="w-full mt-2 rounded-xl border overflow-hidden no-scrollbar"
-                    style={{
-                      backgroundColor: '#131316',
-                      borderColor: '#27272a',
-                      boxShadow: '0 16px 48px rgba(0,0,0,0.7)',
-                      maxHeight: '55vh',
-                      overflowY: 'auto',
-                    }}
-                  >
-                    {results.filter(r => r?.url).map((result, i) => (
-                      <a
-                        key={result.url ?? i}
-                        href={result.url}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="flex flex-col px-4 py-3 border-b last:border-b-0 transition-colors duration-100 no-underline"
-                        style={{ borderColor: '#1f1f22', textDecoration: 'none', color: 'inherit' }}
-                        onMouseEnter={(e) => (e.currentTarget.style.backgroundColor = '#1c1c1f')}
-                        onMouseLeave={(e) => (e.currentTarget.style.backgroundColor = 'transparent')}
-                      >
-                        <p className="text-xs text-zinc-500 font-mono truncate mb-0.5">{result.url}</p>
-                        <p className="text-sm font-medium text-zinc-200 truncate">{result.title}</p>
-                        {(result.description || result.content) && (
-                          <p className="text-xs text-zinc-500 mt-0.5 line-clamp-1">
-                            {result.description || result.content?.substring(0, 120)}
-                          </p>
-                        )}
-                      </a>
-                    ))}
-                  </motion.div>
-                )}
-              </AnimatePresence>
-
+              <motion.div layoutId="search-container" transition={{ duration: 0.85, ease: [0.22, 1, 0.36, 1] }} className="relative w-full">
+                <SearchInput {...inputProps} autoFocus />
+              </motion.div>
             </motion.div>
           )}
         </AnimatePresence>
 
         {/* RESULTS */}
-        <div className={`w-full max-w-2xl ${isResultsMode ? 'pt-14' : ''}`}>
+        <div className={`w-full max-w-2xl ${isResultsMode ? 'pt-24' : ''}`}>
 
           {/* AI Terminal */}
           <AnimatePresence>
-            {showBeam && (
+            {isResultsMode && (
               <motion.div
                 initial={{ opacity: 0, y: 10 }}
                 animate={{ opacity: 1, y: 0 }}
@@ -370,6 +359,11 @@ export default function Home() {
                       <ReactMarkdown>{completion}</ReactMarkdown>
                     </div>
                   )}
+                  {!isAITriggered && !isAILoading && !completion && (
+                    <div className="flex items-center gap-2 text-zinc-500/80 text-sm italic">
+                      Press <kbd className="font-sans px-1.5 py-0.5 rounded-md bg-zinc-800 border border-zinc-700 text-zinc-400 text-xs shadow-sm">Enter</kbd> to generate an AI summary
+                    </div>
+                  )}
                 </Terminal>
               </motion.div>
             )}
@@ -381,7 +375,7 @@ export default function Home() {
               <motion.div
                 initial={{ opacity: 0, y: 16 }}
                 animate={{ opacity: 1, y: 0 }}
-                className="w-full mt-8 relative z-0"
+                className="w-full mt-4 relative z-0"
                 style={{ willChange: 'opacity, transform' }}
               >
                 <h3 className="text-zinc-500 text-xs font-semibold mb-6 tracking-wider uppercase pl-1 border-l-2 border-zinc-800">
