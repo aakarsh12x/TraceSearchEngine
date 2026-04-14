@@ -1,3 +1,4 @@
+// last updated: 2026-04-14
 import express from "express";
 import cors from "cors";
 import { search, syncIndex } from "./index-manager.js";
@@ -63,8 +64,21 @@ app.post("/crawler/reddit", async (req, res) => {
   return res.json({ message: "Reddit crawler started in background", subreddits });
 });
 
+// Admin endpoint to re-sync FlexSearch index from DB without restarting
+app.post("/admin/resync", async (req, res) => {
+  console.log("\n🔄 Manual re-sync triggered via /admin/resync...");
+  try {
+    await syncIndex();
+    res.json({ message: "Index re-synced successfully from database." });
+  } catch (err) {
+    console.error("❌ Re-sync failed:", err);
+    res.status(500).json({ error: "Re-sync failed" });
+  }
+});
+
 // Sync index at setup time
 app.listen(PORT, async () => {
-  console.log(`Backend Server running on port ${PORT}`);
+  console.log(`\n🚀 Backend Server initialized on port ${PORT}`);
+  console.log(`📡 Current Time: ${new Date().toISOString()}`);
   await syncIndex();
 });
