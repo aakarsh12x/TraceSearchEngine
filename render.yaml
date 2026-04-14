@@ -27,5 +27,5 @@ services:
 crons:
   - name: keep-backend-alive
     schedule: "*/14 * * * *"
-    # Replace with your actual Render backend URL from the dashboard.
-    command: "curl -fs https://trace-backend.onrender.com/health || true"
+    # Pings the actual deployment URL to prevent sleep
+    command: "curl -fs https://tracesearchengine.onrender.com/health || true"
