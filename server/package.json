@@ -7,9 +7,11 @@
   "type": "module",
   "main": "dist/index.js",
   "scripts": {
-    "dev": "tsx watch src/index.ts",
-    "build": "tsc",
-    "start": "node dist/index.js"
+    "dev":        "npx tsx watch src/index.ts",
+    "build":      "tsc",
+    "start":      "node dist/index.js",
+    "crawl":      "tsx scripts/mega-crawl.ts",
+    "check":      "tsx scripts/check-count.ts"
   },
   "dependencies": {
     "@neondatabase/serverless": "^1.0.2",
