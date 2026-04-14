@@ -2,7 +2,7 @@ import puppeteer, { Browser, Page } from 'puppeteer';
 import * as cheerio from 'cheerio';
 import * as crypto from 'crypto';
 import { sql } from './db.js';
-import { syncIndex } from './index-manager.js';
+import { syncIndex, addDocumentToIndex } from './index-manager.js';
 
 // ─── Type ────────────────────────────────────────────────────────────────────
 
@@ -233,6 +233,17 @@ export async function crawl(seedUrl: string, options: CrawlerOptions) {
         pagesProcessed++;
         console.log(`  ✓ [${pagesProcessed}/${options.maxPages}] ${options.source} — ${title.slice(0, 70)}`);
 
+        // Incrementally add to the live in-memory index so it's searchable immediately
+        try {
+          addDocumentToIndex({
+            url:         pageData.url,
+            title:       pageData.title       || '',
+            description: pageData.description || '',
+            source:      pageData.source      || '',
+            content:     pageData.content     || '',
+          });
+        } catch (_) { /* non-fatal */ }
+
         // Queue child links
         if (item.depth < options.maxDepth) {
           let linksAdded = 0;
@@ -279,5 +290,12 @@ export async function crawl(seedUrl: string, options: CrawlerOptions) {
   await browser.close();
 
   console.log(`✅ Done [${options.source}]: ${pagesProcessed} pages saved`);
+
+  // Rebuild the full index from DB so every page (including deduped ones) is correctly indexed
+  if (pagesProcessed > 0) {
+    console.log('🔄 Triggering full index re-sync after crawl...');
+    await syncIndex().catch(err => console.error('Post-crawl syncIndex failed:', err));
+  }
+
   return pagesProcessed;
 }
