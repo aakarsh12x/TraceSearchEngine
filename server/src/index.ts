@@ -1,4 +1,5 @@
 // last updated: 2026-04-14
+import 'dotenv/config';
 import express from "express";
 import cors from "cors";
 import { search, syncIndex } from "./index-manager.js";

@@ -3,36 +3,29 @@ services:
   - type: web
     name: trace-backend
     runtime: node
+    # Render builds from the repo root; rootDir scopes the build context.
     rootDir: server
     buildCommand: npm install && npm run build
-    startCommand: npm start
-    envVars:
-      - key: DATABASE_URL
-        sync: false
-      - key: PORT
-        value: 3001
+    startCommand: node dist/index.js
     healthCheckPath: /health
-
-  # ── Next.js Frontend ────────────────────────────────────────────────────────
-  - type: web
-    name: trace-frontend
-    runtime: node
-    rootDir: src
-    buildCommand: npm install && npm run build
-    startCommand: npm start
     envVars:
-      - key: NVIDIA_KEY
+      - key: NODE_ENV
+        value: production
+      - key: PORT
+        value: 10000
+      - key: DATABASE_URL
+        # Set this in the Render dashboard → Environment → DATABASE_URL
         sync: false
+      # Tell Puppeteer to skip downloading Chromium (Render provides it via apt)
+      - key: PUPPETEER_SKIP_CHROMIUM_DOWNLOAD
+        value: "true"
+      # Render's built-in Chromium path on its Linux image
+      - key: PUPPETEER_EXECUTABLE_PATH
+        value: /usr/bin/google-chrome-stable
 
-# ── Keep-alive cron jobs (prevents free-tier sleep after 15 min inactivity) ──
+# ── Keep-alive cron (prevents free-tier sleep after 15 min inactivity) ────────
 crons:
   - name: keep-backend-alive
     schedule: "*/14 * * * *"
-    # Render cron jobs run a shell command; we use curl to ping the health endpoint.
-    # Replace the URL with your actual Render backend service URL after first deploy.
+    # Replace with your actual Render backend URL from the dashboard.
     command: "curl -fs https://trace-backend.onrender.com/health || true"
-
-  - name: keep-frontend-alive
-    schedule: "*/14 * * * *"
-    # Replace the URL with your actual Render frontend service URL after first deploy.
-    command: "curl -fs https://trace-frontend.onrender.com/ || true"

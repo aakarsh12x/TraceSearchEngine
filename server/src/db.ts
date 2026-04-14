@@ -1,12 +1,7 @@
 import { neon } from '@neondatabase/serverless';
-import { config } from 'dotenv';
-import path from 'path';
-
-// Load .env from the root directory
-config({ path: path.resolve(process.cwd(), '../.env') });
 
 if (!process.env.DATABASE_URL) {
-  throw new Error('DATABASE_URL is not defined in .env');
+  throw new Error('DATABASE_URL environment variable is not set.');
 }
 
 export const sql = neon(process.env.DATABASE_URL);
