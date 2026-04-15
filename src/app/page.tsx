@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { Meteors } from '@/components/ui/meteors';
 import { useCompletion } from '@ai-sdk/react';
@@ -8,6 +8,10 @@ import ReactMarkdown from 'react-markdown';
 import { Terminal } from '@/components/ui/terminal';
 import { ShimmerButton } from '@/components/ui/shimmer-button';
 import { TextAnimate } from '@/components/ui/text-animate';
+
+// ─── Animation constants (module-level = zero re-creation cost per render) ────
+const EASE = [0.32, 0.72, 0, 1] as const;
+const DUR = 0.55;
 
 // ─── Icons ───────────────────────────────────────────────────────────────────
 
@@ -89,7 +93,8 @@ function SearchInput({
         placeholder={compact ? 'Search or ask anything…' : 'Ask anything (Press ↵ for AI)…'}
         className="w-full outline-none"
         style={{
-          transition: 'all 0.85s cubic-bezier(0.22, 1, 0.36, 1)',
+          // Only transition compositor-friendly properties, never 'all'
+          transition: 'border-color 0.2s ease, box-shadow 0.2s ease, padding 0.5s cubic-bezier(0.22, 1, 0.36, 1), font-size 0.5s cubic-bezier(0.22, 1, 0.36, 1)',  
           borderRadius: '0.75rem',
           fontSize: compact ? '0.875rem' : '1rem',
           paddingLeft: '2.6rem',
@@ -190,20 +195,22 @@ export default function Home() {
     }
   };
 
-  const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+  const handleKeyDown = useCallback((e: React.KeyboardEvent<HTMLInputElement>) => {
     if (e.key === 'Enter') handleSearch();
-  };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [handleSearch]);
 
-  const showBeam = isAITriggered || isAILoading || completion.length > 0;
-  const EASE = [0.25, 0.46, 0.45, 0.94] as const;
+  // Stable callbacks — wrapped in useCallback so SearchInput never re-renders
+  // due to a new function reference on unrelated state changes.
+  const handleFocus = useCallback(() => setIsFocused(true), []);
+  const handleBlur  = useCallback(() => setIsFocused(false), []);
 
-  // Shared input props
   const inputProps = {
     query, isFocused,
     onChange: setQuery,
     onKeyDown: handleKeyDown,
-    onFocus: () => setIsFocused(true),
-    onBlur: () => setIsFocused(false),
+    onFocus: handleFocus,
+    onBlur: handleBlur,
     onSearch: handleSearch,
     isLoading: isLoadingResults,
   };
@@ -229,10 +236,10 @@ export default function Home() {
         {isResultsMode && (
           <motion.header
             key="topbar"
-            initial={{ opacity: 0, y: -10 }}
+            initial={{ opacity: 0, y: -56 }}
             animate={{ opacity: 1, y: 0 }}
-            exit={{ opacity: 0, y: -10 }}
-            transition={{ duration: 0.18, ease: EASE }}
+            exit={{ opacity: 0, y: -56 }}
+            transition={{ duration: DUR, ease: EASE, delay: 0.08 }}
             className="fixed top-0 left-0 right-0 z-50 flex items-center px-6 py-3 border-b"
             style={{
               backgroundColor: 'rgba(9,9,11,0.92)',
@@ -241,8 +248,13 @@ export default function Home() {
               willChange: 'opacity, transform',
             }}
           >
-            {/* Left: logo */}
-            <motion.div layoutId="trace-logo" transition={{ duration: 0.85, ease: [0.22, 1, 0.36, 1] }} className="w-auto min-w-[6rem] shrink-0">
+            {/* Left: logo — slides in from the left */}
+            <motion.div
+              initial={{ opacity: 0, x: -16 }}
+              animate={{ opacity: 1, x: 0 }}
+              transition={{ duration: DUR, ease: EASE, delay: 0.18 }}
+              className="w-auto min-w-[6rem] shrink-0"
+            >
               <span
                 className="text-xl font-semibold select-none"
                 style={{ fontFamily: "'Audiowide', cursive", color: '#fafafa', letterSpacing: '-0.02em' }}
@@ -251,45 +263,66 @@ export default function Home() {
               </span>
             </motion.div>
 
-            {/* Center: search bar */}
-            <motion.div layoutId="search-container" transition={{ duration: 0.85, ease: [0.22, 1, 0.36, 1] }} className="flex-1 flex justify-center">
+            {/* Center: search bar — fades + scales in */}
+            <motion.div
+              initial={{ opacity: 0, scaleX: 0.92 }}
+              animate={{ opacity: 1, scaleX: 1 }}
+              transition={{ duration: DUR, ease: EASE, delay: 0.12 }}
+              className="flex-1 flex justify-center"
+              style={{ transformOrigin: 'center' }}
+            >
               <div className="w-full max-w-2xl">
                 <SearchInput {...inputProps} compact autoFocus />
               </div>
             </motion.div>
 
             {/* Right: NIM GPT ACTIVE badge */}
-            <div className="w-auto min-w-[6rem] shrink-0 flex justify-end">
-                <span
-                  className="px-2.5 py-1 rounded-full text-[10px] font-medium border whitespace-nowrap"
-                  style={{
-                    backgroundColor: '#18181b',
-                    borderColor: '#27272a',
-                    color: '#71717a',
-                    fontFamily: "'Geist Mono', monospace",
-                    letterSpacing: '0.08em',
-                  }}
-                >
-                  <span className="inline-block w-1.5 h-1.5 rounded-full bg-emerald-500 mr-1.5 align-middle shadow-[0_0_8px_rgba(16,185,129,0.8)]" />
-                  NIM GPT
-                </span>
-            </div>
+            <motion.div
+              initial={{ opacity: 0, x: 16 }}
+              animate={{ opacity: 1, x: 0 }}
+              transition={{ duration: DUR, ease: EASE, delay: 0.22 }}
+              className="w-auto min-w-[6rem] shrink-0 flex justify-end"
+            >
+              <span
+                className="px-2.5 py-1 rounded-full text-[10px] font-medium border whitespace-nowrap"
+                style={{
+                  backgroundColor: '#18181b',
+                  borderColor: '#27272a',
+                  color: '#71717a',
+                  fontFamily: "'Geist Mono', monospace",
+                  letterSpacing: '0.08em',
+                }}
+              >
+                <span className="inline-block w-1.5 h-1.5 rounded-full bg-emerald-500 mr-1.5 align-middle shadow-[0_0_8px_rgba(16,185,129,0.8)]" />
+                NIM GPT
+              </span>
+            </motion.div>
           </motion.header>
         )}
       </AnimatePresence>
 
       {/* ── PAGE BODY ──────────────────────────────────────────────────── */}
-      <div className={`relative z-10 flex flex-col items-center px-4 w-full min-h-screen ${isResultsMode ? 'justify-start' : 'justify-center'}`}>
+      <div
+        className="relative z-10 flex flex-col items-center px-4 w-full min-h-screen justify-start"
+        style={{
+          paddingTop: isResultsMode ? '5rem' : 'calc(50vh - 180px)',
+          transition: `padding-top ${DUR}s cubic-bezier(0.32, 0.72, 0, 1)`,
+        }}
+      >
 
-        {/* HERO */}
-        <AnimatePresence mode="popLayout">
+        {/* HERO — smoothly floats up and fades out when typing starts */}
+        <AnimatePresence mode="wait">
           {!isResultsMode && (
             <motion.div
               key="hero"
-              initial={{ opacity: 0, y: 20 }}
+              initial={{ opacity: 0, y: 28 }}
               animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0, y: -8, transition: { duration: 0.15, ease: EASE } }}
-              transition={{ duration: 0.28, ease: EASE }}
+              exit={{
+                opacity: 0,
+                y: -40,
+                transition: { duration: DUR, ease: EASE },
+              }}
+              transition={{ duration: 0.45, ease: EASE }}
               style={{ willChange: 'opacity, transform' }}
               className="text-center w-full max-w-2xl flex flex-col items-center"
             >
@@ -309,7 +342,7 @@ export default function Home() {
                 </span>
               </div>
 
-              <motion.div layoutId="trace-logo" transition={{ duration: 0.85, ease: [0.22, 1, 0.36, 1] }}>
+              <div>
                 <TextAnimate
                   as="h1"
                   animation="blurInUp"
@@ -320,20 +353,20 @@ export default function Home() {
                 >
                   Trace
                 </TextAnimate>
-              </motion.div>
+              </div>
               <p className="text-sm mb-8" style={{ color: '#52525b' }}>
                 Search engine for developers by a developer
               </p>
 
-              <motion.div layoutId="search-container" transition={{ duration: 0.85, ease: [0.22, 1, 0.36, 1] }} className="relative w-full">
+              <div className="relative w-full">
                 <SearchInput {...inputProps} autoFocus />
-              </motion.div>
+              </div>
             </motion.div>
           )}
         </AnimatePresence>
 
         {/* RESULTS */}
-        <div className={`w-full max-w-2xl ${isResultsMode ? 'pt-24' : ''}`}>
+        <div className="w-full max-w-2xl">
 
           {/* AI Terminal */}
           <AnimatePresence>
@@ -376,7 +409,6 @@ export default function Home() {
                 initial={{ opacity: 0, y: 16 }}
                 animate={{ opacity: 1, y: 0 }}
                 className="w-full mt-4 relative z-0"
-                style={{ willChange: 'opacity, transform' }}
               >
                 <h3 className="text-zinc-500 text-xs font-semibold mb-6 tracking-wider uppercase pl-1 border-l-2 border-zinc-800">
                   Source Results
@@ -388,7 +420,6 @@ export default function Home() {
                       href={result.url}
                       target="_blank"
                       rel="noopener noreferrer"
-                      layout
                       initial={{ opacity: 0, y: 12 }}
                       animate={{ opacity: 1, y: 0 }}
                       exit={{ opacity: 0, scale: 0.97 }}
