@@ -1,13 +1,26 @@
 import FlexSearch from 'flexsearch';
 import { getPagesChunk } from './storage.js';
 import { sql } from './db.js';
+import fs from 'fs';
+import path from 'path';
+import { fileURLToPath } from 'url';
+
+// ─── Cache paths ──────────────────────────────────────────────────────────────
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+// Stored one level up from /dist or /src so it survives TypeScript recompiles
+const CACHE_DIR         = path.resolve(__dirname, '../../.cache/flexsearch');
+const CACHE_META_FILE   = path.join(CACHE_DIR, 'meta.json');
+const CACHE_CONTENT_FILE = path.join(CACHE_DIR, 'content-cache.json');
 
 // ─── Index setup ──────────────────────────────────────────────────────────────
 
 let index: any = null;
 const contentCache = new Map<string, string>();
 
-export function addDocumentToIndex(doc: { url: string, title: string, description: string, source: string, content?: string }) {
+export function addDocumentToIndex(doc: {
+  url: string; title: string; description: string; source: string; content?: string;
+}) {
   const searchIndex = getIndex();
   searchIndex.add({
     url:         doc.url,
@@ -41,15 +54,109 @@ export function getIndex() {
   return index;
 }
 
-export async function syncIndex() {
-  // Always rebuild a fresh index to avoid stale data from hot-reloads
-  index = createIndex();
-  const searchIndex = index;
+// ─── Disk persistence helpers ─────────────────────────────────────────────────
 
+/** Serialize the FlexSearch index to .cache/flexsearch/ */
+async function saveIndexToDisk(docCount: number): Promise<void> {
+  try {
+    fs.mkdirSync(CACHE_DIR, { recursive: true });
+
+    // FlexSearch's export gives us one chunk per internal key
+    const chunks: Record<string, any> = {};
+    await new Promise<void>((resolve) => {
+      index.export((key: string, data: any) => {
+        chunks[key] = data;
+      });
+      // export() is synchronous in FlexSearch Document; resolve after tick
+      setImmediate(resolve);
+    });
+
+    // Write each chunk as a separate file (FlexSearch requirement on import)
+    for (const [key, data] of Object.entries(chunks)) {
+      const safe = key.replace(/[^a-z0-9_\-]/gi, '_');
+      fs.writeFileSync(path.join(CACHE_DIR, `${safe}.json`), JSON.stringify(data ?? null));
+    }
+
+    // Write content cache
+    fs.writeFileSync(CACHE_CONTENT_FILE, JSON.stringify(Object.fromEntries(contentCache)));
+
+    // Write meta (doc count + key list for import)
+    fs.writeFileSync(CACHE_META_FILE, JSON.stringify({
+      docCount,
+      keys: Object.keys(chunks),
+      savedAt: new Date().toISOString(),
+    }));
+
+    console.log(`💾 Index cache saved (${docCount} docs, ${Object.keys(chunks).length} chunks)`);
+  } catch (err) {
+    // Non-fatal — worst case we rebuild next time
+    console.warn('⚠️  Could not save index cache:', err);
+  }
+}
+
+/** Load a previously saved index from .cache/flexsearch/. Returns true on success. */
+async function loadIndexFromDisk(currentDbCount: number): Promise<boolean> {
+  try {
+    if (!fs.existsSync(CACHE_META_FILE)) return false;
+
+    const meta = JSON.parse(fs.readFileSync(CACHE_META_FILE, 'utf-8'));
+
+    // Stale check: if DB has grown since last save, force a rebuild
+    if (meta.docCount !== currentDbCount) {
+      console.log(`🔄 Cache stale (cached ${meta.docCount}, DB has ${currentDbCount}) — rebuilding…`);
+      return false;
+    }
+
+    console.log(`\n⚡ Loading index from disk cache (${meta.docCount} docs, saved ${meta.savedAt})…`);
+
+    index = createIndex();
+
+    // Import each chunk back in
+    for (const key of meta.keys) {
+      const safe = key.replace(/[^a-z0-9_\-]/gi, '_');
+      const file = path.join(CACHE_DIR, `${safe}.json`);
+      if (!fs.existsSync(file)) {
+        console.warn(`  Missing cache chunk: ${file} — falling back to DB rebuild`);
+        index = createIndex();
+        return false;
+      }
+      const data = JSON.parse(fs.readFileSync(file, 'utf-8'));
+      await new Promise<void>((resolve) => index.import(key, data, resolve));
+    }
+
+    // Restore content cache
+    if (fs.existsSync(CACHE_CONTENT_FILE)) {
+      const raw = JSON.parse(fs.readFileSync(CACHE_CONTENT_FILE, 'utf-8'));
+      for (const [url, content] of Object.entries(raw)) {
+        contentCache.set(url, content as string);
+      }
+    }
+
+    console.log(`✅ Index loaded from cache in milliseconds.\n`);
+    return true;
+  } catch (err) {
+    console.warn('⚠️  Cache load failed, falling back to DB rebuild:', err);
+    index = createIndex();
+    return false;
+  }
+}
+
+// ─── Public sync ──────────────────────────────────────────────────────────────
+
+export async function syncIndex() {
   const countRes = await sql`SELECT count(*) as c FROM pages`;
   const total = Number(countRes[0].c);
 
-  console.log(`\n📚 Syncing index: ${total} pages...`);
+  // --- Fast path: restore from disk if cache is fresh ---
+  const loaded = await loadIndexFromDisk(total);
+  if (loaded) return;
+
+  // --- Slow path: build from DB ---
+  // Always start with a clean index to avoid stale data from hot-reloads
+  index = createIndex();
+  contentCache.clear();
+
+  console.log(`\n📚 Building index from DB: ${total} pages…`);
 
   const CHUNK_SIZE = 1000;
   let offset = 0;
@@ -75,6 +182,9 @@ export async function syncIndex() {
   }
 
   console.log(`✅ Index ready: ${synced} pages loaded.\n`);
+
+  // Persist to disk so next startup is instant
+  await saveIndexToDisk(synced);
 }
 
 // ─── Relevance Ranker ─────────────────────────────────────────────────────────

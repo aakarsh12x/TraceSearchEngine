@@ -31,6 +31,9 @@ Thumbs.db
 # ── Puppeteer cache ──────────────────────────────────
 .cache/puppeteer/
 
+# ── FlexSearch disk cache (auto-rebuilt from DB) ─────
+.cache/flexsearch/
+
 # ── IDE ───────────────────────────────────────────────
 .vscode/
 .idea/
