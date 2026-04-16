@@ -121,7 +121,7 @@ async function loadIndexFromDisk(currentDbCount: number): Promise<boolean> {
         return false;
       }
       const data = JSON.parse(fs.readFileSync(file, 'utf-8'));
-      await new Promise<void>((resolve) => index.import(key, data, resolve));
+      index.import(key, data);
     }
 
     // Restore content cache
@@ -261,67 +261,182 @@ function scoreDoc(doc: any, queryTerms: string[], rawQuery: string, content: str
   return score;
 }
 
-// ─── Public search function ───────────────────────────────────────────────────
+// ─── Fuzzy helpers ────────────────────────────────────────────────────────────
 
 /**
- * Search and return deduplicated, multi-signal ranked results.
- *
- * Pipeline:
- *  1. FlexSearch retrieves a candidate pool (limit: 40) via full-tokenized search
- *  2. Candidates are field-deduplicated and merged into a Map
- *  3. Each candidate is scored by the multi-signal ranker
- *  4. Sorted by final score, top 10 returned
+ * Generate 1-edit-distance typo variants for a single word.
+ * Covers the most-common typing mistakes:
+ *   - Adjacent-key transpositions  ("typscript"  → "typescript")
+ *   - Single-char deletions        ("typescritp" → "typescript")
+ *   - Double-letter collapse       ("reacct"     → "react")
+ * Only for words >= 4 chars to avoid noise on short terms.
  */
-export async function search(query: string): Promise<any[]> {
-  const t0 = Date.now();
-  const searchIndex = getIndex();
-  const trimmedQuery = query.trim();
-  if (!trimmedQuery) return [];
+function typoVariants(word: string): string[] {
+  if (word.length < 4) return [];
+  const variants = new Set<string>();
 
-  const queryTerms = [...new Set(
-    trimmedQuery.toLowerCase().split(/\s+/).filter(t => t.length >= 2)
-  )];
+  // Adjacent transpositions (fast-typing finger-swap)
+  for (let i = 0; i < word.length - 1; i++) {
+    variants.add(word.slice(0, i) + word[i + 1] + word[i] + word.slice(i + 2));
+  }
 
-  // Step 1 — FlexSearch candidate retrieval (title + description only)
-  const raw: any[] = await searchIndex.search(trimmedQuery, {
-    limit: 40,
-    enrich: true,
-    suggest: true,
-  });
-  const t1 = Date.now();
+  // Single-char deletion (dropped key)
+  for (let i = 0; i < word.length; i++) {
+    const del = word.slice(0, i) + word.slice(i + 1);
+    if (del.length >= 3) variants.add(del);
+  }
 
-  // Step 2 — Merge across field layers, deduplicate by URL
-  const candidates = new Map<string, any>(); // url → stored doc
+  // Double-letter collapse ("reacct" → "react")
+  for (let i = 0; i < word.length - 1; i++) {
+    if (word[i] === word[i + 1]) variants.add(word.slice(0, i) + word.slice(i + 1));
+  }
+
+  variants.delete(word);
+  return Array.from(variants);
+}
+
+/**
+ * Phonetic skeleton: strip vowels + collapse repeated chars.
+ * Last-resort pass for severe typos ("javascrip", "typescrpt").
+ */
+function phoneticSkeleton(word: string): string {
+  return word.toLowerCase()
+    .replace(/[aeiou]/g, '')
+    .replace(/(.)\1+/g, '$1')
+    .slice(0, 8);
+}
+
+/** Merge FlexSearch raw results into candidates map, return count added. */
+function mergeRaw(raw: any[], candidates: Map<string, any>): number {
+  let added = 0;
   for (const layer of raw) {
     for (const hit of (layer.result || [])) {
       const url = hit.id as string;
       if (url && !candidates.has(url)) {
         candidates.set(url, hit.doc ?? { url });
+        added++;
       }
     }
   }
+  return added;
+}
 
-  if (candidates.size === 0) return [];
+// ─── Public search function ───────────────────────────────────────────────────
 
-  // Step 3 — Fetch full content from memory cache for top candidates (for scoring only)
-  const urls = Array.from(candidates.keys());
-  let contentMap: Record<string, string> = {};
-  
-  for (const url of urls) {
+/**
+ * Multi-pass fuzzy search pipeline:
+ *
+ *  Pass 1 — Exact FlexSearch query (fast, always runs)
+ *  Pass 2 — If candidates sparse (< 8): typo variants per term
+ *  Pass 3 — If still sparse (< 5): phonetic skeleton of query
+ *
+ *  Fuzzy-only candidates receive a score penalty so exact matches
+ *  always rank above them.
+ */
+export async function search(query: string): Promise<{ results: any[]; total: number }> {
+  const t0 = Date.now();
+  const searchIndex = getIndex();
+  const trimmedQuery = query.trim();
+  if (!trimmedQuery || trimmedQuery.length < 2) return { results: [], total: 0 };
+
+  const queryTerms = [...new Set(
+    trimmedQuery.toLowerCase().split(/\s+/).filter(t => t.length >= 2)
+  )];
+
+  // ── Pass 1: exact query ──────────────────────────────────────────────────
+  const raw1: any[] = await searchIndex.search(trimmedQuery, {
+    limit: 150,
+    enrich: true,
+    suggest: true,
+  });
+  const t1 = Date.now();
+
+  const candidates = new Map<string, any>();
+  const fuzzyUrlSet = new Set<string>(); // urls only found via fuzzy passes
+
+  // Collect pass-1 url set before merging for later comparison
+  const pass1Urls = new Set<string>(
+    raw1.flatMap((l: any) => (l.result || []).map((h: any) => h.id as string))
+  );
+  mergeRaw(raw1, candidates);
+
+  // ── Pass 2: typo variants ────────────────────────────────────────────────
+  const t2Start = Date.now();
+  if (candidates.size < 8 && queryTerms.length > 0) {
+    const allVariants = [...new Set(queryTerms.flatMap(t => typoVariants(t)))].slice(0, 30);
+
+    for (const variant of allVariants) {
+      const raw2: any[] = await searchIndex.search(variant, {
+        limit: 60,
+        enrich: true,
+        suggest: true,
+      });
+      mergeRaw(raw2, candidates);
+    }
+
+    // Mark every url NOT in pass-1 as fuzzy
+    for (const url of candidates.keys()) {
+      if (!pass1Urls.has(url)) fuzzyUrlSet.add(url);
+    }
+
+    if (fuzzyUrlSet.size > 0)
+      console.log(`   🔀 Fuzzy pass 2 (typo variants): +${fuzzyUrlSet.size} new candidates`);
+  }
+
+  // ── Pass 3: phonetic skeleton (last resort) ──────────────────────────────
+  const t3Start = Date.now();
+  if (candidates.size < 5 && queryTerms.length > 0) {
+    const skeletonQuery = queryTerms
+      .map(phoneticSkeleton)
+      .filter(s => s.length >= 2)
+      .join(' ');
+
+    if (skeletonQuery && skeletonQuery !== trimmedQuery) {
+      const beforeSize = candidates.size;
+      const raw3: any[] = await searchIndex.search(skeletonQuery, {
+        limit: 60,
+        enrich: true,
+        suggest: true,
+      });
+      const added = mergeRaw(raw3, candidates);
+
+      // Mark all newly added as fuzzy
+      const urlsNow = Array.from(candidates.keys());
+      for (const url of urlsNow.slice(beforeSize)) fuzzyUrlSet.add(url);
+
+      if (added > 0)
+        console.log(`   🔀 Fuzzy pass 3 (phonetic): +${added} new candidates`);
+    }
+  }
+  const t3End = Date.now();
+
+  if (candidates.size === 0) return { results: [], total: 0 };
+
+  // ── Content cache lookup for scoring ────────────────────────────────────
+  const contentMap: Record<string, string> = {};
+  for (const url of candidates.keys()) {
     contentMap[url] = contentCache.get(url) || '';
   }
 
-  const t2 = Date.now();
+  // ── Score — fuzzy-only hits get a penalty so exact matches rank above them
+  const FUZZY_PENALTY = 8;
+  const scored = Array.from(candidates.entries()).map(([url, doc]) => {
+    const base = scoreDoc(doc, queryTerms, trimmedQuery, contentMap[url] || '');
+    const score = fuzzyUrlSet.has(url) ? Math.max(0, base - FUZZY_PENALTY) : base;
+    return { doc: { ...doc, url: doc?.url ?? url }, score };
+  });
 
-  // Step 4 — Score each candidate
-  const scored = Array.from(candidates.entries()).map(([url, doc]) => ({
-    doc: { ...doc, url: doc?.url ?? url },
-    score: scoreDoc(doc, queryTerms, trimmedQuery, contentMap[url] || ''),
-  }));
-
-  // Step 5 — Sort and return top 10
+  // ── Sort and return top 50 (frontend paginates) ──────────────────────────
   scored.sort((a, b) => b.score - a.score);
-  const t3 = Date.now();
-  console.log(`Search trace for "${query}": FlexSearch=${t1-t0}ms, MapMerge=${t2-t1}ms, Scoring=${t3-t2}ms, Total=${t3-t0}ms`);
-  return scored.slice(0, 10).map(({ doc }) => doc);
+  const top = scored.slice(0, 50);
+  const tEnd = Date.now();
+
+  console.log(
+    `Search "${query}": exact=${t1 - t0}ms, fuzzy=${t3End - t2Start}ms, ` +
+    `total=${tEnd - t0}ms | candidates=${candidates.size} (fuzzy=${fuzzyUrlSet.size}), returning=${top.length}`
+  );
+
+  return { results: top.map(({ doc }) => doc), total: top.length };
 }
+
+

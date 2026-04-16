@@ -136,6 +136,8 @@ export default function Home() {
   const [hasSearched, setHasSearched] = useState(false);
   const [isFocused, setIsFocused] = useState(false);
   const [isAITriggered, setIsAITriggered] = useState(false);
+  const [page, setPage] = useState(1);
+  const PAGE_SIZE = 10;
 
   // Smoothly morph to results mode as soon as they type or trigger search (Google-style)
   const isResultsMode = isAITriggered || hasSearched || query.trim().length > 0;
@@ -151,6 +153,7 @@ export default function Home() {
       if (query.trim().length < 2) {
         setResults([]);
         setHasSearched(false);
+        setPage(1);
         if (query.trim().length === 0) {
           setIsAITriggered(false);
           setCompletion('');
@@ -159,6 +162,7 @@ export default function Home() {
       }
       setHasSearched(true);
       setIsLoadingResults(true);
+      setPage(1); // reset to page 1 on new query
       try {
         const res = await fetch(`/api/search?q=${encodeURIComponent(query)}`);
         const data = await res.json();
@@ -404,56 +408,148 @@ export default function Home() {
 
           {/* Traditional Results */}
           <AnimatePresence>
-            {results.length > 0 && (
-              <motion.div
-                initial={{ opacity: 0, y: 16 }}
-                animate={{ opacity: 1, y: 0 }}
-                className="w-full mt-4 relative z-0"
-              >
-                <h3 className="text-zinc-500 text-xs font-semibold mb-6 tracking-wider uppercase pl-1 border-l-2 border-zinc-800">
-                  Source Results
-                </h3>
-                <AnimatePresence mode="popLayout">
-                  {results.map((result, i) => (
-                    <motion.a
-                      key={result.url ?? i}
-                      href={result.url}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      initial={{ opacity: 0, y: 12 }}
+            {results.length > 0 && (() => {
+              const totalPages = Math.ceil(results.length / PAGE_SIZE);
+              const pageResults = results.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE);
+
+              return (
+                <motion.div
+                  initial={{ opacity: 0, y: 16 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  className="w-full mt-4 relative z-0"
+                >
+                  {/* Header row */}
+                  <div className="flex items-center justify-between mb-6 pl-1">
+                    <h3 className="text-zinc-500 text-xs font-semibold tracking-wider uppercase border-l-2 border-zinc-800 pl-2">
+                      Source Results
+                    </h3>
+                    <span className="text-zinc-600 text-xs font-mono">
+                      {(page - 1) * PAGE_SIZE + 1}–{Math.min(page * PAGE_SIZE, results.length)} of {results.length}
+                    </span>
+                  </div>
+
+                  {/* Result cards */}
+                  <AnimatePresence mode="popLayout">
+                    {pageResults.map((result, i) => (
+                      <motion.a
+                        key={result.url ?? i}
+                        href={result.url}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        initial={{ opacity: 0, y: 12 }}
+                        animate={{ opacity: 1, y: 0 }}
+                        exit={{ opacity: 0, scale: 0.97 }}
+                        transition={{ delay: i * 0.03, duration: 0.22, ease: 'easeOut' }}
+                        className="group flex flex-col mb-3 p-4 rounded-xl no-underline transition-colors duration-150"
+                        style={{
+                          backgroundColor: '#131316',
+                          border: '1px solid #27272a',
+                          color: 'inherit',
+                          textDecoration: 'none',
+                        }}
+                        onMouseEnter={(e) => {
+                          (e.currentTarget as HTMLElement).style.borderColor = '#3f3f46';
+                          (e.currentTarget as HTMLElement).style.backgroundColor = '#1c1c1f';
+                        }}
+                        onMouseLeave={(e) => {
+                          (e.currentTarget as HTMLElement).style.borderColor = '#27272a';
+                          (e.currentTarget as HTMLElement).style.backgroundColor = '#131316';
+                        }}
+                      >
+                        <p className="text-xs mb-1.5 truncate text-zinc-500 font-mono">{result.url}</p>
+                        <h2 className="text-sm font-medium mb-1.5 flex items-center text-zinc-200">
+                          {result.title}
+                          <ArrowIcon />
+                        </h2>
+                        <p className="text-xs line-clamp-2 leading-relaxed text-zinc-500">
+                          {result.description ||
+                            (result.content ? result.content.substring(0, 150) + '…' : 'No content available.')}
+                        </p>
+                      </motion.a>
+                    ))}
+                  </AnimatePresence>
+
+                  {/* ── Pagination bar ── */}
+                  {totalPages > 1 && (
+                    <motion.div
+                      initial={{ opacity: 0, y: 8 }}
                       animate={{ opacity: 1, y: 0 }}
-                      exit={{ opacity: 0, scale: 0.97 }}
-                      transition={{ delay: i * 0.03, duration: 0.22, ease: 'easeOut' }}
-                      className="group flex flex-col mb-3 p-4 rounded-xl no-underline transition-colors duration-150"
-                      style={{
-                        backgroundColor: '#131316',
-                        border: '1px solid #27272a',
-                        color: 'inherit',
-                        textDecoration: 'none',
-                      }}
-                      onMouseEnter={(e) => {
-                        (e.currentTarget as HTMLElement).style.borderColor = '#3f3f46';
-                        (e.currentTarget as HTMLElement).style.backgroundColor = '#1c1c1f';
-                      }}
-                      onMouseLeave={(e) => {
-                        (e.currentTarget as HTMLElement).style.borderColor = '#27272a';
-                        (e.currentTarget as HTMLElement).style.backgroundColor = '#131316';
-                      }}
+                      transition={{ duration: 0.3, ease: 'easeOut' }}
+                      className="flex items-center justify-center gap-2 mt-6 mb-8 select-none"
                     >
-                      <p className="text-xs mb-1.5 truncate text-zinc-500 font-mono">{result.url}</p>
-                      <h2 className="text-sm font-medium mb-1.5 flex items-center text-zinc-200">
-                        {result.title}
-                        <ArrowIcon />
-                      </h2>
-                      <p className="text-xs line-clamp-2 leading-relaxed text-zinc-500">
-                        {result.description ||
-                          (result.content ? result.content.substring(0, 150) + '…' : 'No content available.')}
-                      </p>
-                    </motion.a>
-                  ))}
-                </AnimatePresence>
-              </motion.div>
-            )}
+                      {/* Prev */}
+                      <button
+                        disabled={page === 1}
+                        onClick={() => { setPage(p => p - 1); window.scrollTo({ top: 0, behavior: 'smooth' }); }}
+                        className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-all duration-150 disabled:opacity-25 disabled:cursor-not-allowed"
+                        style={{
+                          backgroundColor: '#18181b',
+                          border: '1px solid #27272a',
+                          color: '#a1a1aa',
+                        }}
+                        onMouseEnter={(e) => { if (page !== 1) (e.currentTarget as HTMLElement).style.borderColor = '#3f3f46'; }}
+                        onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.borderColor = '#27272a'; }}
+                      >
+                        <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2.5">
+                          <path strokeLinecap="round" strokeLinejoin="round" d="M10.5 19.5L3 12m0 0l7.5-7.5M3 12h18" />
+                        </svg>
+                        Prev
+                      </button>
+
+                      {/* Page numbers */}
+                      <div className="flex items-center gap-1">
+                        {Array.from({ length: totalPages }, (_, i) => i + 1)
+                          .filter(p => p === 1 || p === totalPages || Math.abs(p - page) <= 1)
+                          .reduce<(number | 'gap')[]>((acc, p, idx, arr) => {
+                            if (idx > 0 && p - (arr[idx - 1] as number) > 1) acc.push('gap');
+                            acc.push(p);
+                            return acc;
+                          }, [])
+                          .map((p, idx) =>
+                            p === 'gap' ? (
+                              <span key={`gap-${idx}`} className="text-zinc-600 text-xs px-1">…</span>
+                            ) : (
+                              <button
+                                key={p}
+                                onClick={() => { setPage(p as number); window.scrollTo({ top: 0, behavior: 'smooth' }); }}
+                                className="w-7 h-7 rounded-lg text-xs font-mono font-medium transition-all duration-150"
+                                style={{
+                                  backgroundColor: p === page ? '#27272a' : '#131316',
+                                  border: `1px solid ${p === page ? '#3f3f46' : '#1f1f23'}`,
+                                  color: p === page ? '#fafafa' : '#52525b',
+                                  boxShadow: p === page ? '0 0 0 1px rgba(63,63,70,0.4)' : 'none',
+                                }}
+                              >
+                                {p}
+                              </button>
+                            )
+                          )
+                        }
+                      </div>
+
+                      {/* Next */}
+                      <button
+                        disabled={page === totalPages}
+                        onClick={() => { setPage(p => p + 1); window.scrollTo({ top: 0, behavior: 'smooth' }); }}
+                        className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-all duration-150 disabled:opacity-25 disabled:cursor-not-allowed"
+                        style={{
+                          backgroundColor: '#18181b',
+                          border: '1px solid #27272a',
+                          color: '#a1a1aa',
+                        }}
+                        onMouseEnter={(e) => { if (page !== totalPages) (e.currentTarget as HTMLElement).style.borderColor = '#3f3f46'; }}
+                        onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.borderColor = '#27272a'; }}
+                      >
+                        Next
+                        <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2.5">
+                          <path strokeLinecap="round" strokeLinejoin="round" d="M13.5 4.5L21 12m0 0l-7.5 7.5M21 12H3" />
+                        </svg>
+                      </button>
+                    </motion.div>
+                  )}
+                </motion.div>
+              );
+            })()}
           </AnimatePresence>
 
         </div>

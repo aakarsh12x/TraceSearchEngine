@@ -30,9 +30,9 @@ app.get("/search", async (req, res) => {
 
     console.log(`Performing search across index for query: ${query}`);
 
-    const results = await search(query);
+    const { results, total } = await search(query);
 
-    return res.json({ results });
+    return res.json({ results, total });
   } catch (err) {
     console.error(err);
     return res.status(500).json({ error: "Internal Server Error" });

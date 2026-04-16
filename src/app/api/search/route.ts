@@ -5,7 +5,7 @@ export async function GET(request: Request) {
   const query = searchParams.get('q');
 
   if (!query) {
-    return NextResponse.json({ results: [] });
+    return NextResponse.json({ results: [], total: 0 });
   }
 
   try {
@@ -33,14 +33,13 @@ export async function GET(request: Request) {
       }
       results = Array.from(scoreMap.values())
         .sort((a, b) => b.score - a.score)
-        .slice(0, 10)
         .map(({ doc }) => doc);
     }
 
     // Filter out any entries without a URL
     results = results.filter((r: any) => r?.url);
 
-    return NextResponse.json({ results });
+    return NextResponse.json({ results, total: data.total ?? results.length });
   } catch (error) {
     console.error('Search error:', error);
     return NextResponse.json({ error: 'Search failed' }, { status: 500 });
