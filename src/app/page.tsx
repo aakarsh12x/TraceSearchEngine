@@ -8,6 +8,7 @@ import ReactMarkdown from 'react-markdown';
 import { Terminal } from '@/components/ui/terminal';
 import { ShimmerButton } from '@/components/ui/shimmer-button';
 import { TextAnimate } from '@/components/ui/text-animate';
+import { CanvasText } from '@/components/ui/canvas-text';
 
 // ─── Animation constants (module-level = zero re-creation cost per render) ────
 const EASE = [0.32, 0.72, 0, 1] as const;
@@ -332,16 +333,21 @@ export default function Home() {
             >
               <div className="inline-flex items-center gap-2 mb-7">
                 <span
-                  className="px-3 py-1 rounded-full text-xs font-medium border"
+                  className="relative inline-flex items-center gap-2 px-3.5 py-1.5 rounded-full text-xs font-medium"
                   style={{
-                    backgroundColor: '#18181b',
-                    borderColor: '#27272a',
-                    color: '#71717a',
+                    background: 'linear-gradient(135deg, rgba(16,185,129,0.08) 0%, rgba(52,211,153,0.04) 100%)',
+                    border: '1px solid rgba(52,211,153,0.25)',
+                    color: '#34d399',
                     fontFamily: "'Geist Mono', monospace",
-                    letterSpacing: '0.08em',
+                    letterSpacing: '0.1em',
+                    boxShadow: '0 0 16px rgba(52,211,153,0.08), inset 0 1px 0 rgba(255,255,255,0.04)',
+                    backdropFilter: 'blur(8px)',
                   }}
                 >
-                  <span className="inline-block w-1.5 h-1.5 rounded-full bg-emerald-500 mr-2 align-middle shadow-[0_0_8px_rgba(16,185,129,0.8)]" />
+                  <span className="relative flex h-2 w-2">
+                    <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-60" />
+                    <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500 shadow-[0_0_6px_rgba(52,211,153,0.9)]" />
+                  </span>
                   NIM GPT ACTIVE
                 </span>
               </div>
@@ -358,8 +364,29 @@ export default function Home() {
                   Trace
                 </TextAnimate>
               </div>
-              <p className="text-sm mb-8" style={{ color: '#52525b' }}>
-                Search engine for developers by a developer
+              <p className="text-base mb-8" style={{ color: '#a1a1aa' }}>
+                Search engine for{' '}
+                <span style={{ filter: 'drop-shadow(0 0 12px rgba(52,211,153,0.55))' }}>
+                  <CanvasText
+                    text="developers"
+                    className="font-bold text-lg"
+                    backgroundClassName="bg-emerald-800"
+                    colors={[
+                      '#34d399',
+                      '#a7f3d0',
+                      '#10b981',
+                      '#6ee7b7',
+                      '#34d399',
+                      '#a7f3d0',
+                      '#059669',
+                      '#6ee7b7',
+                    ]}
+                    lineGap={1.5}
+                    lineWidth={3.5}
+                    animationDuration={8}
+                    curveIntensity={28}
+                  />
+                </span>{' '}by a developer
               </p>
 
               <div className="relative w-full">

@@ -1,7 +1,7 @@
 import './globals.css';
 
 export const metadata = {
-  title: 'Trace — Search Engine',
+  title: 'Trace - Search Engine',
   description: 'A high-speed, minimal search engine powered by TypeScript.',
 };
 
