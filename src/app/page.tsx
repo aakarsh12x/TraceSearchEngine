@@ -9,6 +9,7 @@ import { Terminal } from '@/components/ui/terminal';
 import { ShimmerButton } from '@/components/ui/shimmer-button';
 import { TextAnimate } from '@/components/ui/text-animate';
 import { CanvasText } from '@/components/ui/canvas-text';
+import { NoiseBackground } from '@/components/ui/noise-background';
 
 // ─── Animation constants (module-level = zero re-creation cost per render) ────
 const EASE = [0.32, 0.72, 0, 1] as const;
@@ -332,24 +333,32 @@ export default function Home() {
               className="text-center w-full max-w-2xl flex flex-col items-center"
             >
               <div className="inline-flex items-center gap-2 mb-7">
-                <span
-                  className="relative inline-flex items-center gap-2 px-3.5 py-1.5 rounded-full text-xs font-medium"
-                  style={{
-                    background: 'linear-gradient(135deg, rgba(16,185,129,0.08) 0%, rgba(52,211,153,0.04) 100%)',
-                    border: '1px solid rgba(52,211,153,0.25)',
-                    color: '#34d399',
-                    fontFamily: "'Geist Mono', monospace",
-                    letterSpacing: '0.1em',
-                    boxShadow: '0 0 16px rgba(52,211,153,0.08), inset 0 1px 0 rgba(255,255,255,0.04)',
-                    backdropFilter: 'blur(8px)',
-                  }}
+                <NoiseBackground
+                  containerClassName="rounded-full p-[1.5px]"
+                  gradientColors={[
+                    'rgb(16, 185, 129)',
+                    'rgb(52, 211, 153)',
+                    'rgb(6, 78, 59)',
+                    'rgb(5, 150, 105)',
+                  ]}
+                  noiseOpacity={0.22}
+                  noiseFrequency={0.8}
                 >
-                  <span className="relative flex h-2 w-2">
-                    <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-60" />
-                    <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500 shadow-[0_0_6px_rgba(52,211,153,0.9)]" />
+                  <span
+                    className="inline-flex items-center gap-1.5 rounded-full px-3 py-1.5 text-xs"
+                    style={{
+                      backgroundColor: '#080a09',
+                      fontFamily: 'ui-monospace, monospace',
+                      letterSpacing: '0.04em',
+                    }}
+                  >
+                    <span style={{ color: '#3f3f46' }}>ai</span>
+                    <span style={{ color: '#27272a' }}>/</span>
+                    <span style={{ color: '#34d399', fontWeight: 600 }}>nim</span>
+                    <span style={{ color: '#27272a' }}>·</span>
+                    <span style={{ color: '#52525b' }}>llama-3.1-70b</span>
                   </span>
-                  NIM GPT ACTIVE
-                </span>
+                </NoiseBackground>
               </div>
 
               <div>
