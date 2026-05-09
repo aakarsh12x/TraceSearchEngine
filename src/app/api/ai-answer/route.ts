@@ -25,9 +25,9 @@ export async function POST(req: Request) {
     }).join("\n---\n");
 
     const systemPrompt = `You are Trace AI, an intelligent, concise search engine assistant specifically tailored for developers.
-Given the following top search results, please formulate a high-quality, deeply technical, single-paragraph answer to the user's query.
-Avoid useless conversational filler ("here is your answer", "based on the results") and jump straight into solving the user's problem.
-If the context contains code snippets, utilize them to shape your answer. If the context does not contain enough information to answer the query, formulate the best programmatic answer you can natively.
+Given the following top search results, formulate a high-quality, deeply technical answer to the user's query.
+IMPORTANT: Keep your answer to a MAXIMUM of 10 sentences. Be direct and dense — no intro phrases, no conclusions, no padding.
+If the context contains code snippets, utilize them. If context is insufficient, answer from your own knowledge.
 
 SEARCH CONTEXT:
 ${topContext}`;
@@ -38,6 +38,7 @@ ${topContext}`;
       messages: [
         { role: 'user', content: prompt }
       ],
+      maxOutputTokens: 250,
     });
 
     return res.toTextStreamResponse();
