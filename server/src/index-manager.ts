@@ -129,7 +129,7 @@ async function loadIndexFromDisk(currentDbCount?: number): Promise<boolean> {
 
     // Read all chunks concurrently
     const chunkDataArr = await Promise.all(
-      chunkPaths.map(({ file }) => readFile(file, 'utf-8').then(JSON.parse))
+      chunkPaths.map(({ file }: { file: string }) => readFile(file, 'utf-8').then(JSON.parse))
     );
 
     // Import into FlexSearch (must be sequential — FlexSearch internal state)
