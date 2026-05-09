@@ -144,30 +144,36 @@ export default function Home() {
   const PAGE_SIZE = 10;
 
   // ── Index readiness polling ───────────────────────────────────────────────
-  const [indexReady, setIndexReady] = useState(false);
-  const [showReadyBanner, setShowReadyBanner] = useState(true); // controls fade-out
+  const [showReadyBanner, setShowReadyBanner] = useState(true);
 
   useEffect(() => {
     let timerId: ReturnType<typeof setTimeout>;
+
+    const dismiss = () => setShowReadyBanner(false);
+
+    // Hard fallback: always dismiss after 10 s even if polling never gets true
+    const fallback = setTimeout(dismiss, 10_000);
 
     const poll = async () => {
       try {
         const res = await fetch('/api/status');
         const data = await res.json();
         if (data.indexReady) {
-          setIndexReady(true);
-          // Keep banner visible briefly so user sees the "ready" state, then fade
-          setTimeout(() => setShowReadyBanner(false), 1200);
-          return; // stop polling
+          clearTimeout(fallback);
+          dismiss(); // hide immediately — no linger
+          return;   // stop polling
         }
       } catch {
         // Backend not up yet — keep polling
       }
-      timerId = setTimeout(poll, 1500);
+      timerId = setTimeout(poll, 800);
     };
 
     poll();
-    return () => clearTimeout(timerId);
+    return () => {
+      clearTimeout(timerId);
+      clearTimeout(fallback);
+    };
   }, []);
 
   // Smoothly morph to results mode as soon as they type or trigger search (Google-style)
@@ -288,41 +294,38 @@ export default function Home() {
               fontFamily: "'Geist Mono', ui-monospace, monospace",
             }}
           >
-            {/* Pulsing dot — amber while loading, green when ready */}
+            {/* Amber pulsing dot */}
             <span
               className="inline-block w-2 h-2 rounded-full flex-shrink-0"
               style={{
-                backgroundColor: indexReady ? '#10b981' : '#f59e0b',
-                boxShadow: indexReady
-                  ? '0 0 8px rgba(16,185,129,0.8)'
-                  : '0 0 8px rgba(245,158,11,0.8)',
-                animation: indexReady ? 'none' : 'pulse 1.4s ease-in-out infinite',
+                backgroundColor: '#f59e0b',
+                boxShadow: '0 0 8px rgba(245,158,11,0.8)',
+                animation: 'pulse 1.4s ease-in-out infinite',
               }}
             />
 
             {/* Label */}
-            <span className="text-[11px] font-medium" style={{ color: indexReady ? '#a1a1aa' : '#71717a', letterSpacing: '0.04em' }}>
-              {indexReady ? 'Index ready' : 'Getting ready\u2009·\u2009loading index\u2026'}
+            <span className="text-[11px] font-medium" style={{ color: '#71717a', letterSpacing: '0.04em' }}>
+              Getting ready{'\u2009·\u2009'}loading index…
             </span>
 
-            {/* Shimmer progress bar — only while loading */}
-            {!indexReady && (
+            {/* Shimmer progress bar */}
+            <span
+              className="absolute bottom-0 left-0 h-[2px] rounded-b-xl overflow-hidden w-full"
+              style={{ background: 'transparent' }}
+            >
               <span
-                className="absolute bottom-0 left-0 h-[2px] rounded-b-xl overflow-hidden w-full"
-                style={{ background: 'transparent' }}
-              >
-                <span
-                  className="block h-full w-1/2 rounded-full"
-                  style={{
-                    background: 'linear-gradient(90deg, transparent, #f59e0b88, transparent)',
-                    animation: 'shimmer-bar 1.6s ease-in-out infinite',
-                  }}
-                />
-              </span>
-            )}
+                className="block h-full w-1/2 rounded-full"
+                style={{
+                  background: 'linear-gradient(90deg, transparent, #f59e0b88, transparent)',
+                  animation: 'shimmer-bar 1.6s ease-in-out infinite',
+                }}
+              />
+            </span>
           </motion.div>
         )}
       </AnimatePresence>
+
 
       {/* Background */}
       <div className="absolute inset-0 overflow-hidden pointer-events-none">
