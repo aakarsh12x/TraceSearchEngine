@@ -153,3 +153,9 @@ body {
 .no-scrollbar::-webkit-scrollbar-thumb:hover, .scrollbar-thin::-webkit-scrollbar-thumb:hover {
   background: #3f3f46;
 }
+
+/* ─── Index readiness banner shimmer bar ───────────────────────────────── */
+@keyframes shimmer-bar {
+  0%   { transform: translateX(-100%); }
+  100% { transform: translateX(250%); }
+}

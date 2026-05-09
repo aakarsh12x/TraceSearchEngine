@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { Meteors } from '@/components/ui/meteors';
 import { useCompletion } from '@ai-sdk/react';
@@ -73,17 +73,19 @@ interface SearchInputProps {
   onBlur: () => void;
   onSearch: () => void;
   isLoading: boolean;
+  inputRef?: React.RefObject<HTMLInputElement | null>;
   autoFocus?: boolean;
 }
 
 function SearchInput({
   query, isFocused, compact, onChange, onKeyDown, onFocus, onBlur,
-  onSearch, isLoading, autoFocus,
+  onSearch, isLoading, inputRef, autoFocus,
 }: SearchInputProps) {
   return (
     <div className="relative w-full">
       <SearchIcon small={compact} />
       <input
+        ref={inputRef}
         type="text"
         autoFocus={autoFocus}
         spellCheck={false}
@@ -96,7 +98,7 @@ function SearchInput({
         className="w-full outline-none"
         style={{
           // Only transition compositor-friendly properties, never 'all'
-          transition: 'border-color 0.2s ease, box-shadow 0.2s ease, padding 0.5s cubic-bezier(0.22, 1, 0.36, 1), font-size 0.5s cubic-bezier(0.22, 1, 0.36, 1)',  
+          transition: 'border-color 0.2s ease, box-shadow 0.2s ease, padding 0.5s cubic-bezier(0.22, 1, 0.36, 1), font-size 0.5s cubic-bezier(0.22, 1, 0.36, 1)',
           borderRadius: '0.75rem',
           fontSize: compact ? '0.875rem' : '1rem',
           paddingLeft: '2.6rem',
@@ -140,6 +142,33 @@ export default function Home() {
   const [isAITriggered, setIsAITriggered] = useState(false);
   const [page, setPage] = useState(1);
   const PAGE_SIZE = 10;
+
+  // ── Index readiness polling ───────────────────────────────────────────────
+  const [indexReady, setIndexReady] = useState(false);
+  const [showReadyBanner, setShowReadyBanner] = useState(true); // controls fade-out
+
+  useEffect(() => {
+    let timerId: ReturnType<typeof setTimeout>;
+
+    const poll = async () => {
+      try {
+        const res = await fetch('/api/status');
+        const data = await res.json();
+        if (data.indexReady) {
+          setIndexReady(true);
+          // Keep banner visible briefly so user sees the "ready" state, then fade
+          setTimeout(() => setShowReadyBanner(false), 1200);
+          return; // stop polling
+        }
+      } catch {
+        // Backend not up yet — keep polling
+      }
+      timerId = setTimeout(poll, 1500);
+    };
+
+    poll();
+    return () => clearTimeout(timerId);
+  }, []);
 
   // Smoothly morph to results mode as soon as they type or trigger search (Google-style)
   const isResultsMode = isAITriggered || hasSearched || query.trim().length > 0;
@@ -211,6 +240,23 @@ export default function Home() {
   const handleFocus = useCallback(() => setIsFocused(true), []);
   const handleBlur  = useCallback(() => setIsFocused(false), []);
 
+  // ── Focus management: when layout flips to results mode the hero input
+  // unmounts and the compact top-bar input mounts. Using a ref + effect keeps
+  // the cursor alive through the animation instead of relying on autoFocus
+  // (which fires on DOM insertion and races with Framer Motion transitions).
+  const compactInputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    if (isResultsMode) {
+      // requestAnimationFrame defers until after the browser has painted the
+      // new DOM node, so the compact input is guaranteed to exist.
+      const raf = requestAnimationFrame(() => {
+        compactInputRef.current?.focus();
+      });
+      return () => cancelAnimationFrame(raf);
+    }
+  }, [isResultsMode]);
+
   const inputProps = {
     query, isFocused,
     onChange: setQuery,
@@ -223,6 +269,60 @@ export default function Home() {
 
   return (
     <main className="relative min-h-screen overflow-x-hidden" style={{ backgroundColor: '#09090b' }}>
+
+      {/* ── INDEX READINESS BANNER ───────────────────────────────────────── */}
+      <AnimatePresence>
+        {showReadyBanner && (
+          <motion.div
+            key="index-banner"
+            initial={{ opacity: 0, y: 16, scale: 0.95 }}
+            animate={{ opacity: 1, y: 0, scale: 1 }}
+            exit={{ opacity: 0, y: 8, scale: 0.95, transition: { duration: 0.4, ease: 'easeIn' } }}
+            transition={{ duration: 0.4, ease: 'easeOut' }}
+            className="fixed bottom-5 right-5 z-[100] flex items-center gap-2.5 px-3.5 py-2 rounded-xl select-none"
+            style={{
+              backgroundColor: 'rgba(9,9,11,0.88)',
+              border: '1px solid #27272a',
+              backdropFilter: 'blur(14px)',
+              boxShadow: '0 4px 24px rgba(0,0,0,0.45)',
+              fontFamily: "'Geist Mono', ui-monospace, monospace",
+            }}
+          >
+            {/* Pulsing dot — amber while loading, green when ready */}
+            <span
+              className="inline-block w-2 h-2 rounded-full flex-shrink-0"
+              style={{
+                backgroundColor: indexReady ? '#10b981' : '#f59e0b',
+                boxShadow: indexReady
+                  ? '0 0 8px rgba(16,185,129,0.8)'
+                  : '0 0 8px rgba(245,158,11,0.8)',
+                animation: indexReady ? 'none' : 'pulse 1.4s ease-in-out infinite',
+              }}
+            />
+
+            {/* Label */}
+            <span className="text-[11px] font-medium" style={{ color: indexReady ? '#a1a1aa' : '#71717a', letterSpacing: '0.04em' }}>
+              {indexReady ? 'Index ready' : 'Getting ready\u2009·\u2009loading index\u2026'}
+            </span>
+
+            {/* Shimmer progress bar — only while loading */}
+            {!indexReady && (
+              <span
+                className="absolute bottom-0 left-0 h-[2px] rounded-b-xl overflow-hidden w-full"
+                style={{ background: 'transparent' }}
+              >
+                <span
+                  className="block h-full w-1/2 rounded-full"
+                  style={{
+                    background: 'linear-gradient(90deg, transparent, #f59e0b88, transparent)',
+                    animation: 'shimmer-bar 1.6s ease-in-out infinite',
+                  }}
+                />
+              </span>
+            )}
+          </motion.div>
+        )}
+      </AnimatePresence>
 
       {/* Background */}
       <div className="absolute inset-0 overflow-hidden pointer-events-none">
@@ -278,7 +378,7 @@ export default function Home() {
               style={{ transformOrigin: 'center' }}
             >
               <div className="w-full max-w-2xl">
-                <SearchInput {...inputProps} compact autoFocus />
+                <SearchInput {...inputProps} compact inputRef={compactInputRef} />
               </div>
             </motion.div>
 
@@ -399,7 +499,7 @@ export default function Home() {
               </p>
 
               <div className="relative w-full">
-                <SearchInput {...inputProps} autoFocus />
+                <SearchInput {...inputProps} autoFocus />  {/* hero: autoFocus is safe here, it only fires once on initial page load */}
               </div>
             </motion.div>
           )}

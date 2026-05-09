@@ -8,6 +8,9 @@ import { crawl } from "./crawler.js";
 const app = express();
 const PORT = process.env.PORT || 3001;
 
+// ── Index readiness flag ──────────────────────────────────────────────────────
+let indexReady = false;
+
 app.use(cors());
 app.use(express.json());
 
@@ -18,6 +21,11 @@ app.get("/", (req, res) => {
 // Keep-alive health check — pinged by Render cron job every 14 minutes
 app.get("/health", (req, res) => {
   res.json({ status: "ok", uptime: process.uptime(), timestamp: new Date().toISOString() });
+});
+
+// Index readiness — polled by the frontend on startup
+app.get("/status", (req, res) => {
+  res.json({ indexReady });
 });
 
 app.get("/search", async (req, res) => {
@@ -87,4 +95,6 @@ app.listen(PORT, async () => {
   console.log(`\n🚀 Backend Server initialized on port ${PORT}`);
   console.log(`📡 Current Time: ${new Date().toISOString()}`);
   await syncIndex();
+  indexReady = true;
+  console.log(`✅ Index is ready — /status will now return { indexReady: true }`);
 });
