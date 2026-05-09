@@ -2,6 +2,7 @@ import FlexSearch from 'flexsearch';
 import { getPagesChunk } from './storage.js';
 import { sql } from './db.js';
 import fs from 'fs';
+import { readFile } from 'fs/promises';
 import path from 'path';
 import { fileURLToPath } from 'url';
 
@@ -95,14 +96,14 @@ async function saveIndexToDisk(docCount: number): Promise<void> {
 }
 
 /** Load a previously saved index from .cache/flexsearch/. Returns true on success. */
-async function loadIndexFromDisk(currentDbCount: number): Promise<boolean> {
+async function loadIndexFromDisk(currentDbCount?: number): Promise<boolean> {
   try {
     if (!fs.existsSync(CACHE_META_FILE)) return false;
 
     const meta = JSON.parse(fs.readFileSync(CACHE_META_FILE, 'utf-8'));
 
-    // Stale check: if DB has grown since last save, force a rebuild
-    if (meta.docCount !== currentDbCount) {
+    // Stale check — only possible when caller already knows the DB count
+    if (currentDbCount !== undefined && meta.docCount !== currentDbCount) {
       console.log(`🔄 Cache stale (cached ${meta.docCount}, DB has ${currentDbCount}) — rebuilding…`);
       return false;
     }
@@ -111,22 +112,34 @@ async function loadIndexFromDisk(currentDbCount: number): Promise<boolean> {
 
     index = createIndex();
 
-    // Import each chunk back in
-    for (const key of meta.keys) {
+    // ── Read all chunk files in PARALLEL (async I/O, non-blocking) ────────────────────────
+    const chunkPaths = meta.keys.map((key: string) => {
       const safe = key.replace(/[^a-z0-9_\-]/gi, '_');
-      const file = path.join(CACHE_DIR, `${safe}.json`);
+      return { key, file: path.join(CACHE_DIR, `${safe}.json`) };
+    });
+
+    // Check all files exist before starting
+    for (const { file } of chunkPaths) {
       if (!fs.existsSync(file)) {
         console.warn(`  Missing cache chunk: ${file} — falling back to DB rebuild`);
         index = createIndex();
         return false;
       }
-      const data = JSON.parse(fs.readFileSync(file, 'utf-8'));
-      index.import(key, data);
     }
 
-    // Restore content cache
+    // Read all chunks concurrently
+    const chunkDataArr = await Promise.all(
+      chunkPaths.map(({ file }) => readFile(file, 'utf-8').then(JSON.parse))
+    );
+
+    // Import into FlexSearch (must be sequential — FlexSearch internal state)
+    for (let i = 0; i < meta.keys.length; i++) {
+      index.import(meta.keys[i], chunkDataArr[i]);
+    }
+
+    // Restore content cache (read async)
     if (fs.existsSync(CACHE_CONTENT_FILE)) {
-      const raw = JSON.parse(fs.readFileSync(CACHE_CONTENT_FILE, 'utf-8'));
+      const raw = JSON.parse(await readFile(CACHE_CONTENT_FILE, 'utf-8'));
       for (const [url, content] of Object.entries(raw)) {
         contentCache.set(url, content as string);
       }
@@ -141,18 +154,17 @@ async function loadIndexFromDisk(currentDbCount: number): Promise<boolean> {
   }
 }
 
-// ─── Public sync ──────────────────────────────────────────────────────────────
+// ─── Public sync ──────────────────────────────────────────────────────────────────────────────────
 
 export async function syncIndex() {
+  // ── Fast path: try disk cache FIRST (no DB round-trip needed) ───────────────────────────
+  const cachedOk = await loadIndexFromDisk(); // no count arg = skip stale check
+  if (cachedOk) return;
+
+  // ── Slow path: cache missing / corrupt — hit DB to build from scratch ───────────────────
   const countRes = await sql`SELECT count(*) as c FROM pages`;
   const total = Number(countRes[0].c);
 
-  // --- Fast path: restore from disk if cache is fresh ---
-  const loaded = await loadIndexFromDisk(total);
-  if (loaded) return;
-
-  // --- Slow path: build from DB ---
-  // Always start with a clean index to avoid stale data from hot-reloads
   index = createIndex();
   contentCache.clear();
 
@@ -184,6 +196,33 @@ export async function syncIndex() {
   console.log(`✅ Index ready: ${synced} pages loaded.\n`);
 
   // Persist to disk so next startup is instant
+  await saveIndexToDisk(synced);
+}
+
+/** Force a full DB rebuild regardless of disk cache (used by /admin/resync). */
+export async function forceSync() {
+  const countRes = await sql`SELECT count(*) as c FROM pages`;
+  const total = Number(countRes[0].c);
+  index = createIndex();
+  contentCache.clear();
+  console.log(`\n🔄 Force-rebuilding index from DB: ${total} pages…`);
+  const CHUNK_SIZE = 1000;
+  let offset = 0;
+  let synced = 0;
+  while (offset < total) {
+    const rows = await getPagesChunk(offset, CHUNK_SIZE);
+    if (rows.length === 0) break;
+    for (const page of rows) {
+      addDocumentToIndex({
+        url: page.url, title: page.title || '',
+        description: page.description || '', source: page.source || '',
+        content: page.content || '',
+      });
+    }
+    synced += rows.length;
+    offset += CHUNK_SIZE;
+  }
+  console.log(`✅ Force-sync done: ${synced} pages.\n`);
   await saveIndexToDisk(synced);
 }
 

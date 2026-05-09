@@ -31,7 +31,12 @@ export async function getAllPages() {
  */
 export async function getPagesChunk(offset: number, limit: number) {
   try {
-    const rows = await sql`SELECT * FROM pages ORDER BY id ASC LIMIT ${limit} OFFSET ${offset}`;
+    const rows = await sql`
+      SELECT url, title, description, source, content
+      FROM pages
+      ORDER BY id ASC
+      LIMIT ${limit} OFFSET ${offset}
+    `;
     return rows.map((r: any) => ({
       url: r.url,
       title: r.title,

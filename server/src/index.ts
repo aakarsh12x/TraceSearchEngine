@@ -2,7 +2,7 @@
 import 'dotenv/config';
 import express from "express";
 import cors from "cors";
-import { search, syncIndex } from "./index-manager.js";
+import { search, syncIndex, forceSync } from "./index-manager.js";
 import { crawl } from "./crawler.js";
 
 const app = express();
@@ -82,7 +82,7 @@ app.post("/crawler/reddit", async (req, res) => {
 app.post("/admin/resync", async (req, res) => {
   console.log("\n🔄 Manual re-sync triggered via /admin/resync...");
   try {
-    await syncIndex();
+    await forceSync(); // always rebuilds from DB, ignores disk cache
     res.json({ message: "Index re-synced successfully from database." });
   } catch (err) {
     console.error("❌ Re-sync failed:", err);
