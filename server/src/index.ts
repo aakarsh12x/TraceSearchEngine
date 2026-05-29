@@ -1,4 +1,4 @@
-// last updated: 2026-04-14
+// last updated: 2026-05-30
 import 'dotenv/config';
 import express from "express";
 import cors from "cors";
@@ -7,6 +7,24 @@ import { crawl } from "./crawler.js";
 
 const app = express();
 const PORT = process.env.PORT || 3001;
+
+// ── IST time-window helpers ──────────────────────────────────────────────────
+// Active hours: 09:00 – 23:00 IST (UTC+5:30)
+// Outside this window the server lets itself idle on Render to save hours.
+
+function getISTHour(): number {
+  const now = new Date();
+  // IST = UTC + 5h30m
+  const utcMs = now.getTime() + now.getTimezoneOffset() * 60_000;
+  const istMs = utcMs + 5.5 * 60 * 60 * 1_000;
+  return new Date(istMs).getHours();
+}
+
+/** Returns true between 09:00 and 22:59 IST (9 AM – 11 PM) */
+function isActiveHours(): boolean {
+  const hour = getISTHour();
+  return hour >= 9 && hour < 23;
+}
 
 // ── Index readiness flag ──────────────────────────────────────────────────────
 let indexReady = false;
@@ -18,9 +36,16 @@ app.get("/", (req, res) => {
   res.send("Search Engine Backend Running");
 });
 
-// Keep-alive health check — pinged by Render cron job every 14 minutes
+// Keep-alive health check — pinged externally or by internal self-ping
 app.get("/health", (req, res) => {
-  res.json({ status: "ok", uptime: process.uptime(), timestamp: new Date().toISOString() });
+  const active = isActiveHours();
+  res.json({
+    status: active ? "ok" : "sleeping",
+    activeHours: "09:00–23:00 IST",
+    istHour: getISTHour(),
+    uptime: process.uptime(),
+    timestamp: new Date().toISOString(),
+  });
 });
 
 // Index readiness — polled by the frontend on startup
@@ -90,11 +115,39 @@ app.post("/admin/resync", async (req, res) => {
   }
 });
 
+// ── Self-managed keep-alive ───────────────────────────────────────────────────
+// Pings /health every 14 minutes ONLY during active IST hours (09:00–23:00).
+// This replaces the always-on Render cron job, saving ~10 hrs/day of cron usage.
+function startSelfPing(baseUrl: string): void {
+  const INTERVAL_MS = 14 * 60 * 1_000; // 14 minutes
+
+  setInterval(async () => {
+    if (!isActiveHours()) {
+      console.log(`💤 [${new Date().toISOString()}] Off-hours (IST ${getISTHour()}:xx) — skipping self-ping to allow idle.`);
+      return;
+    }
+    try {
+      const res = await fetch(`${baseUrl}/health`);
+      const data = await res.json() as { status: string; istHour: number };
+      console.log(`✅ [${new Date().toISOString()}] Self-ping OK — IST hour: ${data.istHour}, status: ${data.status}`);
+    } catch (err) {
+      console.error(`❌ [${new Date().toISOString()}] Self-ping failed:`, err);
+    }
+  }, INTERVAL_MS);
+
+  console.log(`⏰ Self-ping scheduler started — active 09:00–23:00 IST, silent 23:00–09:00 IST`);
+}
+
 // Sync index at setup time
 app.listen(PORT, async () => {
   console.log(`\n🚀 Backend Server initialized on port ${PORT}`);
   console.log(`📡 Current Time: ${new Date().toISOString()}`);
+  console.log(`🕐 Current IST Hour: ${getISTHour()}`);
   await syncIndex();
   indexReady = true;
   console.log(`✅ Index is ready — /status will now return { indexReady: true }`);
+
+  // Start self-ping using the public Render URL (or localhost for dev)
+  const selfUrl = process.env.RENDER_EXTERNAL_URL || `http://localhost:${PORT}`;
+  startSelfPing(selfUrl);
 });
