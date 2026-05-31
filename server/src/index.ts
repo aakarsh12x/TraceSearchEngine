@@ -9,7 +9,7 @@ const app = express();
 const PORT = process.env.PORT || 3001;
 
 // ── IST time-window helpers ──────────────────────────────────────────────────
-// Active hours: 09:00 – 23:00 IST (UTC+5:30)
+// Active hours: 09:00 – 21:00 IST (UTC+5:30)
 // Outside this window the server lets itself idle on Render to save hours.
 
 function getISTHour(): number {
@@ -20,10 +20,10 @@ function getISTHour(): number {
   return new Date(istMs).getHours();
 }
 
-/** Returns true between 09:00 and 22:59 IST (9 AM – 11 PM) */
+/** Returns true between 09:00 and 20:59 IST (9 AM – 9 PM) */
 function isActiveHours(): boolean {
   const hour = getISTHour();
-  return hour >= 9 && hour < 23;
+  return hour >= 9 && hour < 21;
 }
 
 // ── Index readiness flag ──────────────────────────────────────────────────────
@@ -41,7 +41,7 @@ app.get("/health", (req, res) => {
   const active = isActiveHours();
   res.json({
     status: active ? "ok" : "sleeping",
-    activeHours: "09:00–23:00 IST",
+    activeHours: "09:00–21:00 IST",
     istHour: getISTHour(),
     uptime: process.uptime(),
     timestamp: new Date().toISOString(),
@@ -116,8 +116,8 @@ app.post("/admin/resync", async (req, res) => {
 });
 
 // ── Self-managed keep-alive ───────────────────────────────────────────────────
-// Pings /health every 14 minutes ONLY during active IST hours (09:00–23:00).
-// This replaces the always-on Render cron job, saving ~10 hrs/day of cron usage.
+// Pings /health every 14 minutes ONLY during active IST hours (09:00–21:00).
+// This replaces the always-on Render cron job, saving ~12 hrs/day of cron usage.
 function startSelfPing(baseUrl: string): void {
   const INTERVAL_MS = 14 * 60 * 1_000; // 14 minutes
 
@@ -135,7 +135,7 @@ function startSelfPing(baseUrl: string): void {
     }
   }, INTERVAL_MS);
 
-  console.log(`⏰ Self-ping scheduler started — active 09:00–23:00 IST, silent 23:00–09:00 IST`);
+  console.log(`⏰ Self-ping scheduler started — active 09:00–21:00 IST, silent 21:00–09:00 IST`);
 }
 
 // Sync index at setup time
