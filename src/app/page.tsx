@@ -6,13 +6,21 @@ import { Meteors } from '@/components/ui/meteors';
 import { useCompletion } from '@ai-sdk/react';
 import ReactMarkdown from 'react-markdown';
 import { Terminal } from '@/components/ui/terminal';
+import { ShimmerButton } from '@/components/ui/shimmer-button';
 import { TextAnimate } from '@/components/ui/text-animate';
 import { CanvasText } from '@/components/ui/canvas-text';
 import { NoiseBackground } from '@/components/ui/noise-background';
 
 // ─── Animation constants (module-level = zero re-creation cost per render) ────
 const EASE = [0.32, 0.72, 0, 1] as const;
-const DUR = 0.55;
+const DUR = 0.38;
+
+type SearchResult = {
+  url: string;
+  title?: string;
+  description?: string;
+  content?: string;
+};
 
 // ─── Icons ───────────────────────────────────────────────────────────────────
 
@@ -80,7 +88,8 @@ function SearchInput({
   query, isFocused, compact, onChange, onKeyDown, onFocus, onBlur,
   onSearch, isLoading, inputRef, autoFocus,
 }: SearchInputProps) {
-  const canSearch = query.trim().length >= 2;
+  const canSearch = query.trim().length >= 2 && !isLoading;
+
   return (
     <div className="relative w-full">
       <SearchIcon small={compact} />
@@ -98,19 +107,19 @@ function SearchInput({
         className="w-full outline-none"
         style={{
           // Only transition compositor-friendly properties, never 'all'
-          transition: 'border-color 0.2s ease, box-shadow 0.2s ease, padding 0.5s cubic-bezier(0.22, 1, 0.36, 1), font-size 0.5s cubic-bezier(0.22, 1, 0.36, 1)',
-          borderRadius: '0.75rem',
+          transition: 'border-color 0.18s ease, box-shadow 0.18s ease, background-color 0.18s ease',
+          borderRadius: '0.65rem',
           fontSize: compact ? '0.875rem' : '1rem',
           paddingLeft: '2.6rem',
           paddingRight: '3.4rem',
           paddingTop: compact ? '0.55rem' : '1.2rem',
           paddingBottom: compact ? '0.55rem' : '1.2rem',
-          backgroundColor: '#18181b',
-          border: `1px solid ${isFocused ? '#3f3f46' : '#27272a'}`,
+          backgroundColor: isFocused ? '#17181c' : '#111216',
+          border: `1px solid ${isFocused ? '#2dd4bf' : '#2a2d34'}`,
           color: '#fafafa',
           boxShadow: isFocused
-            ? '0 0 0 3px rgba(63,63,70,0.25)'
-            : compact ? 'none' : '0 4px 20px rgba(0,0,0,0.5)',
+            ? '0 0 0 3px rgba(45,212,191,0.12)'
+            : compact ? 'none' : '0 18px 60px rgba(0,0,0,0.32)',
         }}
       />
       <div className="absolute right-1.5 top-1/2 -translate-y-1/2">
@@ -161,60 +170,66 @@ export default function Home() {
   const [page, setPage] = useState(1);
   const PAGE_SIZE = 10;
   const heroInputRef = useRef<HTMLInputElement>(null);
-
-  // ── Index readiness polling ───────────────────────────────────────────────
-  const [showReadyBanner, setShowReadyBanner] = useState(true);
-
-  useEffect(() => {
-    let timerId: ReturnType<typeof setTimeout>;
-
-    const dismiss = () => setShowReadyBanner(false);
-
-    // Hard fallback: always dismiss after 10 s even if polling never gets true
-    const fallback = setTimeout(dismiss, 10_000);
-
-    const poll = async () => {
-      try {
-        const res = await fetch('/api/status');
-        const data = await res.json();
-        if (data.indexReady) {
-          clearTimeout(fallback);
-          dismiss(); // hide immediately — no linger
-          return;   // stop polling
-        }
-      } catch {
-        // Backend not up yet — keep polling
-      }
-      timerId = setTimeout(poll, 800);
-    };
-
-    poll();
-    return () => {
-      clearTimeout(timerId);
-      clearTimeout(fallback);
-    };
-  }, []);
-
-  // Smoothly morph to results mode as soon as they type or trigger search (Google-style)
-  const isResultsMode = isAITriggered || hasSearched || query.trim().length > 0;
-
-  const { completion, complete, isLoading: isAILoading, setCompletion } = useCompletion({
-    api: '/api/ai-answer',
-    streamProtocol: 'text',
-  });
-
+  const compactInputRef = useRef<HTMLInputElement>(null);
   const searchAbortRef = useRef<AbortController | null>(null);
   const searchRequestRef = useRef(0);
   const lastSubmittedQueryRef = useRef('');
   const keepSearchFocusRef = useRef(true);
 
-  // type definition
-  interface SearchResult {
-    title: string;
-    url: string;
-    description?: string;
-    content?: string;
-  }
+  // ── Index readiness polling ───────────────────────────────────────────────
+  // A module-level ref ensures React Strict Mode's double effect invocation
+  // shares the same cancelled flag — preventing two concurrent poll loops.
+  const [showReadyBanner, setShowReadyBanner] = useState(true);
+  const pollingStoppedRef = useRef(false);
+
+  useEffect(() => {
+    // Reset on mount (handles Strict Mode remount)
+    pollingStoppedRef.current = false;
+    let timerId: ReturnType<typeof setTimeout>;
+
+    const dismiss = () => {
+      pollingStoppedRef.current = true;
+      setShowReadyBanner(false);
+      clearTimeout(timerId);
+    };
+
+    // Hard fallback: always dismiss after 15 s even if backend never responds ready
+    const fallback = setTimeout(dismiss, 15_000);
+
+    const poll = async () => {
+      if (pollingStoppedRef.current) return;
+      try {
+        const res = await fetch('/api/status');
+        const data = await res.json();
+        if (data.indexReady) {
+          clearTimeout(fallback);
+          dismiss();
+          return; // stop — index is ready
+        }
+      } catch {
+        // Backend not reachable yet — keep trying
+      }
+      if (!pollingStoppedRef.current) {
+        timerId = setTimeout(poll, 1_500);
+      }
+    };
+
+    poll();
+    return () => {
+      pollingStoppedRef.current = true;
+      clearTimeout(timerId);
+      clearTimeout(fallback);
+    };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Smoothly morph to results mode as soon as they type or trigger search (Google-style)
+  const isResultsMode = isAITriggered || hasSearched || query.trim().length >= 2;
+
+  const { completion, complete, isLoading: isAILoading, setCompletion, stop } = useCompletion({
+    api: '/api/ai-answer',
+    streamProtocol: 'text',
+  });
 
   const runSearch = useCallback(async (term: string) => {
     const trimmed = term.trim();
@@ -222,22 +237,20 @@ export default function Home() {
 
     searchAbortRef.current?.abort();
     const controller = new AbortController();
+    const requestId = searchRequestRef.current + 1;
+    searchRequestRef.current = requestId;
     searchAbortRef.current = controller;
-
-    searchRequestRef.current += 1;
-    const requestId = searchRequestRef.current;
-
     setIsLoadingResults(true);
+
     try {
       const res = await fetch(`/api/search?q=${encodeURIComponent(trimmed)}`, {
         signal: controller.signal,
       });
       if (!res.ok) throw new Error(`Search failed with ${res.status}`);
       const data = await res.json();
+      const nextResults = (data.results || []).filter((r: SearchResult) => r?.url);
 
-      const nextResults = (data.results || []).filter((r: any) => r?.url) as SearchResult[];
-
-      if (requestId !== searchRequestRef.current || controller.signal.aborted) {
+      if (controller.signal.aborted || requestId !== searchRequestRef.current) {
         return [] as SearchResult[];
       }
 
@@ -319,41 +332,50 @@ export default function Home() {
     setCompletion('');
     setHasSearched(true);
     setPage(1);
-    
-    // Cancel any debounced search and run immediately
+    lastSubmittedQueryRef.current = trimmed;
+
     const cur = await runSearch(trimmed);
-    if (cur.length > 0) {
+    if (cur.length > 0 && lastSubmittedQueryRef.current === trimmed) {
       complete(trimmed, { body: { results: cur.slice(0, 4) } });
     }
-  }, [complete, query, runSearch, stop]);
+  }, [complete, query, runSearch, setCompletion, stop]);
 
   const handleKeyDown = useCallback((e: React.KeyboardEvent<HTMLInputElement>) => {
-    if (e.key === 'Enter') handleSearch();
-  // eslint-disable-next-line react-hooks/exhaustive-deps
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      void handleSearch();
+    }
   }, [handleSearch]);
 
   // Stable callbacks — wrapped in useCallback so SearchInput never re-renders
   // due to a new function reference on unrelated state changes.
-  const handleFocus = useCallback(() => setIsFocused(true), []);
-  const handleBlur  = useCallback(() => setIsFocused(false), []);
+  const handleFocus = useCallback(() => {
+    keepSearchFocusRef.current = true;
+    setIsFocused(true);
+  }, []);
+  const handleBlur = useCallback(() => {
+    requestAnimationFrame(() => {
+      const active = document.activeElement;
+      const stillInSearch = active === heroInputRef.current || active === compactInputRef.current;
+      keepSearchFocusRef.current = stillInSearch;
+      setIsFocused(stillInSearch);
+    });
+  }, []);
 
   // ── Focus management: when layout flips to results mode the hero input
   // unmounts and the compact top-bar input mounts. Using a ref + effect keeps
   // the cursor alive through the animation instead of relying on autoFocus
   // (which fires on DOM insertion and races with Framer Motion transitions).
-  const compactInputRef = useRef<HTMLInputElement>(null);
-
-  // Keep focus alive on search input
   useEffect(() => {
-    if (!keepSearchFocusRef.current) return;
     if (isResultsMode) {
+      // requestAnimationFrame defers until after the browser has painted the
+      // new DOM node, so the compact input is guaranteed to exist.
       const raf = requestAnimationFrame(() => {
-        compactInputRef.current?.focus();
-      });
-      return () => cancelAnimationFrame(raf);
-    } else {
-      const raf = requestAnimationFrame(() => {
-        heroInputRef.current?.focus();
+        const node = compactInputRef.current;
+        if (!node || !keepSearchFocusRef.current) return;
+        node.focus({ preventScroll: true });
+        const end = node.value.length;
+        node.setSelectionRange(end, end);
       });
       return () => cancelAnimationFrame(raf);
     }
@@ -370,7 +392,7 @@ export default function Home() {
   };
 
   return (
-    <main className="relative min-h-screen overflow-x-hidden" style={{ backgroundColor: '#09090b' }}>
+    <main className="relative min-h-screen overflow-x-hidden" style={{ backgroundColor: '#090a0d' }}>
 
       {/* ── INDEX READINESS BANNER ───────────────────────────────────────── */}
       <AnimatePresence>
@@ -424,15 +446,15 @@ export default function Home() {
 
 
       {/* Background */}
-      <div className="absolute inset-0 overflow-hidden pointer-events-none">
-        <Meteors number={18} />
+      <div className="absolute inset-0 overflow-hidden pointer-events-none opacity-70">
+        <Meteors number={10} minDuration={7} maxDuration={14} />
       </div>
       <div
         className="absolute inset-0 pointer-events-none"
         style={{
-          backgroundImage:
-            'linear-gradient(#27272a22 1px, transparent 1px), linear-gradient(90deg, #27272a22 1px, transparent 1px)',
-          backgroundSize: '60px 60px',
+          background:
+            'radial-gradient(circle at 50% 0%, rgba(45,212,191,0.10), transparent 34rem), linear-gradient(#2a2d3426 1px, transparent 1px), linear-gradient(90deg, #2a2d3426 1px, transparent 1px)',
+          backgroundSize: 'auto, 64px 64px, 64px 64px',
         }}
       />
 
@@ -441,15 +463,15 @@ export default function Home() {
         {isResultsMode && (
           <motion.header
             key="topbar"
-            initial={{ opacity: 0, y: -56 }}
+            initial={{ opacity: 0, y: -28 }}
             animate={{ opacity: 1, y: 0 }}
-            exit={{ opacity: 0, y: -56 }}
-            transition={{ duration: DUR, ease: EASE, delay: 0.08 }}
-            className="fixed top-0 left-0 right-0 z-50 flex items-center px-6 py-3 border-b"
+            exit={{ opacity: 0, y: -20 }}
+            transition={{ duration: DUR, ease: EASE }}
+            className="fixed top-0 left-0 right-0 z-50 flex items-center gap-4 px-4 sm:px-6 py-3 border-b"
             style={{
-              backgroundColor: 'rgba(9,9,11,0.92)',
+              backgroundColor: 'rgba(9,10,13,0.88)',
               backdropFilter: 'blur(18px)',
-              borderColor: '#27272a',
+              borderColor: '#22262d',
               willChange: 'opacity, transform',
             }}
           >
@@ -457,12 +479,12 @@ export default function Home() {
             <motion.div
               initial={{ opacity: 0, x: -16 }}
               animate={{ opacity: 1, x: 0 }}
-              transition={{ duration: DUR, ease: EASE, delay: 0.18 }}
-              className="w-auto min-w-[6rem] shrink-0"
+              transition={{ duration: 0.28, ease: EASE, delay: 0.04 }}
+              className="hidden sm:block w-auto min-w-[5rem] shrink-0"
             >
               <span
                 className="text-xl font-semibold select-none"
-                style={{ fontFamily: "'Audiowide', cursive", color: '#fafafa', letterSpacing: '-0.02em' }}
+                style={{ fontFamily: "'Audiowide', cursive", color: '#f8fafc', letterSpacing: '0' }}
               >
                 Trace
               </span>
@@ -472,8 +494,8 @@ export default function Home() {
             <motion.div
               initial={{ opacity: 0, scaleX: 0.92 }}
               animate={{ opacity: 1, scaleX: 1 }}
-              transition={{ duration: DUR, ease: EASE, delay: 0.12 }}
-              className="flex-1 flex justify-center"
+              transition={{ duration: 0.28, ease: EASE }}
+              className="flex-1 flex justify-center min-w-0"
               style={{ transformOrigin: 'center' }}
             >
               <div className="w-full max-w-2xl">
@@ -485,20 +507,20 @@ export default function Home() {
             <motion.div
               initial={{ opacity: 0, x: 16 }}
               animate={{ opacity: 1, x: 0 }}
-              transition={{ duration: DUR, ease: EASE, delay: 0.22 }}
-              className="w-auto min-w-[6rem] shrink-0 flex justify-end"
+              transition={{ duration: 0.28, ease: EASE, delay: 0.06 }}
+              className="hidden sm:flex w-auto min-w-[5rem] shrink-0 justify-end"
             >
               <span
                 className="px-2.5 py-1 rounded-full text-[10px] font-medium border whitespace-nowrap"
                 style={{
-                  backgroundColor: '#18181b',
-                  borderColor: '#27272a',
-                  color: '#71717a',
+                  backgroundColor: '#111216',
+                  borderColor: '#2a2d34',
+                  color: '#a1a1aa',
                   fontFamily: "'Geist Mono', monospace",
                   letterSpacing: '0.08em',
                 }}
               >
-                <span className="inline-block w-1.5 h-1.5 rounded-full bg-emerald-500 mr-1.5 align-middle shadow-[0_0_8px_rgba(16,185,129,0.8)]" />
+                <span className="inline-block w-1.5 h-1.5 rounded-full bg-teal-400 mr-1.5 align-middle shadow-[0_0_8px_rgba(45,212,191,0.55)]" />
                 NIM GPT
               </span>
             </motion.div>
@@ -520,14 +542,14 @@ export default function Home() {
           {!isResultsMode && (
             <motion.div
               key="hero"
-              initial={{ opacity: 0, y: 28 }}
+              initial={{ opacity: 0, y: 20 }}
               animate={{ opacity: 1, y: 0 }}
               exit={{
                 opacity: 0,
-                y: -40,
-                transition: { duration: DUR, ease: EASE },
+                y: -22,
+                transition: { duration: 0.24, ease: EASE },
               }}
-              transition={{ duration: 0.45, ease: EASE }}
+              transition={{ duration: 0.34, ease: EASE }}
               style={{ willChange: 'opacity, transform' }}
               className="text-center w-full max-w-2xl flex flex-col items-center"
             >
@@ -535,18 +557,18 @@ export default function Home() {
                 <NoiseBackground
                   containerClassName="rounded-full p-[1.5px]"
                   gradientColors={[
-                    'rgb(16, 185, 129)',
-                    'rgb(52, 211, 153)',
-                    'rgb(6, 78, 59)',
-                    'rgb(5, 150, 105)',
+                    'rgb(45, 212, 191)',
+                    'rgb(96, 165, 250)',
+                    'rgb(20, 184, 166)',
+                    'rgb(15, 23, 42)',
                   ]}
-                  noiseOpacity={0.22}
+                  noiseOpacity={0.16}
                   noiseFrequency={0.8}
                 >
                   <span
                     className="inline-flex items-center gap-1.5 rounded-full px-3 py-1.5 text-xs"
                     style={{
-                      backgroundColor: '#080a09',
+                      backgroundColor: '#090a0d',
                       fontFamily: 'ui-monospace, monospace',
                       letterSpacing: '0.04em',
                     }}
@@ -566,28 +588,28 @@ export default function Home() {
                   animation="blurInUp"
                   by="character"
                   once={true}
-                  className="text-6xl font-semibold tracking-tight mb-3"
-                  style={{ color: '#fafafa', letterSpacing: '-0.03em', fontFamily: "'Audiowide', cursive" }}
+                  className="text-6xl font-semibold mb-3"
+                  style={{ color: '#f8fafc', letterSpacing: '0', fontFamily: "'Audiowide', cursive" }}
                 >
                   Trace
                 </TextAnimate>
               </div>
-              <p className="text-base mb-8" style={{ color: '#a1a1aa' }}>
+              <p className="text-base mb-8" style={{ color: '#b6beca' }}>
                 Search engine for{' '}
-                <span style={{ filter: 'drop-shadow(0 0 12px rgba(52,211,153,0.55))' }}>
+                <span style={{ filter: 'drop-shadow(0 0 12px rgba(45,212,191,0.45))' }}>
                   <CanvasText
                     text="developers"
                     className="font-bold text-lg"
-                    backgroundClassName="bg-emerald-800"
+                    backgroundClassName="bg-teal-900"
                     colors={[
-                      '#34d399',
-                      '#a7f3d0',
-                      '#10b981',
-                      '#6ee7b7',
-                      '#34d399',
-                      '#a7f3d0',
-                      '#059669',
-                      '#6ee7b7',
+                      '#5eead4',
+                      '#bfdbfe',
+                      '#2dd4bf',
+                      '#93c5fd',
+                      '#5eead4',
+                      '#bfdbfe',
+                      '#14b8a6',
+                      '#93c5fd',
                     ]}
                     lineGap={1.5}
                     lineWidth={3.5}
@@ -598,7 +620,7 @@ export default function Home() {
               </p>
 
               <div className="relative w-full">
-                <SearchInput {...inputProps} autoFocus />  {/* hero: autoFocus is safe here, it only fires once on initial page load */}
+                <SearchInput {...inputProps} inputRef={heroInputRef} autoFocus />  {/* hero: autoFocus is safe here, it only fires once on initial page load */}
               </div>
             </motion.div>
           )}
@@ -614,14 +636,14 @@ export default function Home() {
                 initial={{ opacity: 0, y: 10 }}
                 animate={{ opacity: 1, y: 0 }}
                 exit={{ opacity: 0, y: 6 }}
-                transition={{ duration: 0.35, ease: 'easeOut', delay: 0.05 }}
+                transition={{ duration: 0.24, ease: 'easeOut' }}
                 className="w-full mt-4 relative z-10"
                 style={{ willChange: 'opacity, transform' }}
               >
-                <Terminal sequence={false} className="w-full shadow-2xl">
-                  <div className="flex items-center gap-2 mb-3 text-[10px] font-bold uppercase tracking-widest text-purple-400/80">
-                    <span className="flex h-1.5 w-1.5 rounded-full bg-purple-500 shadow-[0_0_8px_rgba(168,85,247,0.5)]" />
-                    Neural Inference Engine
+                <Terminal sequence={false} className="w-full shadow-[0_24px_80px_rgba(0,0,0,0.28)]">
+                  <div className="flex items-center gap-2 mb-3 text-[10px] font-bold uppercase tracking-widest text-teal-300/85">
+                    <span className="flex h-1.5 w-1.5 rounded-full bg-teal-400 shadow-[0_0_8px_rgba(45,212,191,0.5)]" />
+                    Answer Engine
                   </div>
                   {isAILoading && !completion && (
                     <p className="text-zinc-500 italic text-sm animate-pulse">Synthesizing context…</p>
@@ -635,6 +657,9 @@ export default function Home() {
                     <div className="flex items-center gap-2 text-zinc-500/80 text-sm italic">
                       Press <kbd className="font-sans px-1.5 py-0.5 rounded-md bg-zinc-800 border border-zinc-700 text-zinc-400 text-xs shadow-sm">Enter</kbd> to generate an AI summary
                     </div>
+                  )}
+                  {isAITriggered && !isAILoading && !completion && results.length === 0 && !isLoadingResults && (
+                    <div className="text-zinc-500/80 text-sm italic">No source context found for an AI answer.</div>
                   )}
                 </Terminal>
               </motion.div>
@@ -651,11 +676,12 @@ export default function Home() {
                 <motion.div
                   initial={{ opacity: 0, y: 16 }}
                   animate={{ opacity: 1, y: 0 }}
+                  transition={{ duration: 0.24, ease: 'easeOut' }}
                   className="w-full mt-4 relative z-0"
                 >
                   {/* Header row */}
                   <div className="flex items-center justify-between mb-6 pl-1">
-                    <h3 className="text-zinc-500 text-xs font-semibold tracking-wider uppercase border-l-2 border-zinc-800 pl-2">
+                    <h3 className="text-zinc-500 text-xs font-semibold tracking-wider uppercase border-l-2 border-teal-500/40 pl-2">
                       Source Results
                     </h3>
                     <span className="text-zinc-600 text-xs font-mono">
