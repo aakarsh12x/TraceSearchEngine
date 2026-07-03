@@ -6,7 +6,6 @@ import { Meteors } from '@/components/ui/meteors';
 import { useCompletion } from '@ai-sdk/react';
 import ReactMarkdown from 'react-markdown';
 import { Terminal } from '@/components/ui/terminal';
-import { ShimmerButton } from '@/components/ui/shimmer-button';
 import { TextAnimate } from '@/components/ui/text-animate';
 import { CanvasText } from '@/components/ui/canvas-text';
 import { NoiseBackground } from '@/components/ui/noise-background';
@@ -81,6 +80,7 @@ function SearchInput({
   query, isFocused, compact, onChange, onKeyDown, onFocus, onBlur,
   onSearch, isLoading, inputRef, autoFocus,
 }: SearchInputProps) {
+  const canSearch = query.trim().length >= 2;
   return (
     <div className="relative w-full">
       <SearchIcon small={compact} />
@@ -117,14 +117,32 @@ function SearchInput({
         {isLoading ? (
           <div className={`spinner ${compact ? '' : 'mr-1'}`} />
         ) : (
-          <ShimmerButton
-            shimmerSize="0.05em"
-            borderRadius={compact ? '10px' : '12px'}
-            className={`flex items-center justify-center !p-0 ${compact ? 'w-8 h-8' : 'w-10 h-10'}`}
+          <motion.button
             onClick={onSearch}
+            disabled={!canSearch}
+            aria-label="Search with AI"
+            className="flex items-center justify-center border-none outline-none"
+            style={{
+              width: compact ? '1.85rem' : '2.3rem',
+              height: compact ? '1.85rem' : '2.3rem',
+              borderRadius: compact ? '10px' : '12px',
+              backgroundColor: canSearch ? '#2dd4bf' : 'rgba(255, 255, 255, 0.02)',
+              color: canSearch ? '#090a0d' : '#52525b',
+              boxShadow: canSearch ? '0 0 10px rgba(45, 212, 191, 0.3)' : 'none',
+              cursor: canSearch ? 'pointer' : 'not-allowed',
+            }}
+            whileHover={canSearch ? {
+              backgroundColor: '#5eead4',
+              boxShadow: '0 0 15px rgba(45, 212, 191, 0.5)',
+              scale: 1.05,
+            } : {}}
+            whileTap={canSearch ? {
+              scale: 0.95,
+            } : {}}
+            transition={{ type: 'spring', stiffness: 400, damping: 17 }}
           >
-            <ArrowRightIcon className={`opacity-80 ${compact ? 'w-3.5 h-3.5' : 'w-4 h-4'}`} />
-          </ShimmerButton>
+            <ArrowRightIcon className={`opacity-90 ${compact ? 'w-3.5 h-3.5' : 'w-4 h-4'}`} />
+          </motion.button>
         )}
       </div>
     </div>
