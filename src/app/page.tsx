@@ -674,26 +674,12 @@ export default function Home() {
                         initial={{ opacity: 0, y: 12 }}
                         animate={{ opacity: 1, y: 0 }}
                         exit={{ opacity: 0, scale: 0.97 }}
-                        transition={{ delay: i * 0.03, duration: 0.22, ease: 'easeOut' }}
-                        className="group flex flex-col mb-3 p-4 rounded-xl no-underline transition-colors duration-150"
-                        style={{
-                          backgroundColor: '#131316',
-                          border: '1px solid #27272a',
-                          color: 'inherit',
-                          textDecoration: 'none',
-                        }}
-                        onMouseEnter={(e) => {
-                          (e.currentTarget as HTMLElement).style.borderColor = '#3f3f46';
-                          (e.currentTarget as HTMLElement).style.backgroundColor = '#1c1c1f';
-                        }}
-                        onMouseLeave={(e) => {
-                          (e.currentTarget as HTMLElement).style.borderColor = '#27272a';
-                          (e.currentTarget as HTMLElement).style.backgroundColor = '#131316';
-                        }}
+                        transition={{ delay: i * 0.015, duration: 0.18, ease: 'easeOut' }}
+                        className="group flex flex-col mb-3 p-4 rounded-lg border border-[#242832] bg-[#111216] hover:border-[#2dd4bf]/40 hover:bg-[#151821] transition-all duration-200 no-underline text-inherit"
                       >
                         <p className="text-xs mb-1.5 truncate text-zinc-500 font-mono">{result.url}</p>
-                        <h2 className="text-sm font-medium mb-1.5 flex items-center text-zinc-200">
-                          {result.title}
+                        <h2 className="text-sm font-medium mb-1.5 flex items-center text-zinc-100">
+                          {result.title || result.url}
                           <ArrowIcon />
                         </h2>
                         <p className="text-xs line-clamp-2 leading-relaxed text-zinc-500">
@@ -716,14 +702,7 @@ export default function Home() {
                       <button
                         disabled={page === 1}
                         onClick={() => { setPage(p => p - 1); window.scrollTo({ top: 0, behavior: 'smooth' }); }}
-                        className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-all duration-150 disabled:opacity-25 disabled:cursor-not-allowed"
-                        style={{
-                          backgroundColor: '#18181b',
-                          border: '1px solid #27272a',
-                          color: '#a1a1aa',
-                        }}
-                        onMouseEnter={(e) => { if (page !== 1) (e.currentTarget as HTMLElement).style.borderColor = '#3f3f46'; }}
-                        onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.borderColor = '#27272a'; }}
+                        className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium border border-[#242832] bg-[#111216] text-[#a1a1aa] hover:enabled:border-[#2dd4bf]/40 transition-all duration-150 disabled:opacity-25 disabled:cursor-not-allowed cursor-pointer"
                       >
                         <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2.5">
                           <path strokeLinecap="round" strokeLinejoin="round" d="M10.5 19.5L3 12m0 0l7.5-7.5M3 12h18" />
@@ -747,13 +726,11 @@ export default function Home() {
                               <button
                                 key={p}
                                 onClick={() => { setPage(p as number); window.scrollTo({ top: 0, behavior: 'smooth' }); }}
-                                className="w-7 h-7 rounded-lg text-xs font-mono font-medium transition-all duration-150"
-                                style={{
-                                  backgroundColor: p === page ? '#27272a' : '#131316',
-                                  border: `1px solid ${p === page ? '#3f3f46' : '#1f1f23'}`,
-                                  color: p === page ? '#fafafa' : '#52525b',
-                                  boxShadow: p === page ? '0 0 0 1px rgba(63,63,70,0.4)' : 'none',
-                                }}
+                                className={`w-7 h-7 rounded-lg text-xs font-mono font-medium border transition-all duration-150 cursor-pointer ${
+                                  p === page
+                                    ? 'bg-[#173b3b] border-[#2dd4bf]/40 text-[#ecfeff] shadow-[0_0_0_1px_rgba(45,212,191,0.18)]'
+                                    : 'bg-[#111216] border-[#242832] text-[#64748b] hover:border-[#2dd4bf]/40'
+                                }`}
                               >
                                 {p}
                               </button>
@@ -766,14 +743,7 @@ export default function Home() {
                       <button
                         disabled={page === totalPages}
                         onClick={() => { setPage(p => p + 1); window.scrollTo({ top: 0, behavior: 'smooth' }); }}
-                        className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-all duration-150 disabled:opacity-25 disabled:cursor-not-allowed"
-                        style={{
-                          backgroundColor: '#18181b',
-                          border: '1px solid #27272a',
-                          color: '#a1a1aa',
-                        }}
-                        onMouseEnter={(e) => { if (page !== totalPages) (e.currentTarget as HTMLElement).style.borderColor = '#3f3f46'; }}
-                        onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.borderColor = '#27272a'; }}
+                        className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium border border-[#242832] bg-[#111216] text-[#a1a1aa] hover:enabled:border-[#2dd4bf]/40 transition-all duration-150 disabled:opacity-25 disabled:cursor-not-allowed cursor-pointer"
                       >
                         Next
                         <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2.5">
