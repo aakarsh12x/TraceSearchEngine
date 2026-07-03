@@ -153,13 +153,14 @@ function SearchInput({
 
 export default function Home() {
   const [query, setQuery] = useState('');
-  const [results, setResults] = useState<any[]>([]);
+  const [results, setResults] = useState<SearchResult[]>([]);
   const [isLoadingResults, setIsLoadingResults] = useState(false);
   const [hasSearched, setHasSearched] = useState(false);
   const [isFocused, setIsFocused] = useState(false);
   const [isAITriggered, setIsAITriggered] = useState(false);
   const [page, setPage] = useState(1);
   const PAGE_SIZE = 10;
+  const heroInputRef = useRef<HTMLInputElement>(null);
 
   // ── Index readiness polling ───────────────────────────────────────────────
   const [showReadyBanner, setShowReadyBanner] = useState(true);
@@ -202,57 +203,129 @@ export default function Home() {
     streamProtocol: 'text',
   });
 
-  // Search-as-you-type
-  useEffect(() => {
-    const run = async () => {
-      if (query.trim().length < 2) {
-        setResults([]);
-        setHasSearched(false);
-        setPage(1);
-        if (query.trim().length === 0) {
-          setIsAITriggered(false);
-          setCompletion('');
-        }
-        return;
+  const searchAbortRef = useRef<AbortController | null>(null);
+  const searchRequestRef = useRef(0);
+  const lastSubmittedQueryRef = useRef('');
+  const keepSearchFocusRef = useRef(true);
+
+  // type definition
+  interface SearchResult {
+    title: string;
+    url: string;
+    description?: string;
+    content?: string;
+  }
+
+  const runSearch = useCallback(async (term: string) => {
+    const trimmed = term.trim();
+    if (trimmed.length < 2) return [] as SearchResult[];
+
+    searchAbortRef.current?.abort();
+    const controller = new AbortController();
+    searchAbortRef.current = controller;
+
+    searchRequestRef.current += 1;
+    const requestId = searchRequestRef.current;
+
+    setIsLoadingResults(true);
+    try {
+      const res = await fetch(`/api/search?q=${encodeURIComponent(trimmed)}`, {
+        signal: controller.signal,
+      });
+      if (!res.ok) throw new Error(`Search failed with ${res.status}`);
+      const data = await res.json();
+
+      const nextResults = (data.results || []).filter((r: any) => r?.url) as SearchResult[];
+
+      if (requestId !== searchRequestRef.current || controller.signal.aborted) {
+        return [] as SearchResult[];
       }
-      setHasSearched(true);
-      setIsLoadingResults(true);
-      setPage(1); // reset to page 1 on new query
-      try {
-        const res = await fetch(`/api/search?q=${encodeURIComponent(query)}`);
-        const data = await res.json();
-        setResults((data.results || []).filter((r: any) => r?.url));
-      } catch (err) {
+
+      setResults(nextResults);
+      return nextResults;
+    } catch (err: any) {
+      if (err?.name !== 'AbortError') {
         console.error('Search error:', err);
-      } finally {
+      }
+      if (requestId === searchRequestRef.current && !controller.signal.aborted) {
+        setResults([]);
+      }
+      return [] as SearchResult[];
+    } finally {
+      if (requestId === searchRequestRef.current && !controller.signal.aborted) {
         setIsLoadingResults(false);
       }
-    };
-    const t = setTimeout(run, 400);
+      if (searchAbortRef.current === controller) {
+        searchAbortRef.current = null;
+      }
+    }
+  }, []);
+
+  useEffect(() => {
+    const trimmed = query.trim();
+
+    // 1. If user edited the query after submitting, cancel AI generation and reset
+    if (lastSubmittedQueryRef.current && trimmed !== lastSubmittedQueryRef.current) {
+      stop();
+      setCompletion('');
+      setIsAITriggered(false);
+      lastSubmittedQueryRef.current = '';
+    }
+
+    // 2. Handle completely empty query (return to Home / Hero state)
+    if (trimmed.length === 0) {
+      searchAbortRef.current?.abort();
+      setIsLoadingResults(false);
+      setResults([]);
+      setHasSearched(false);
+      setPage(1);
+      stop();
+      setIsAITriggered(false);
+      setCompletion('');
+      lastSubmittedQueryRef.current = '';
+      return;
+    }
+
+    // 3. Handle short query (1 character) - keep in Results mode if already there, but clear results
+    if (trimmed.length < 2) {
+      searchAbortRef.current?.abort();
+      setIsLoadingResults(false);
+      setResults([]);
+      return;
+    }
+
+    // 4. Handle valid search query (>= 2 characters) - trigger search with debounce
+    const t = setTimeout(() => {
+      setHasSearched(true);
+      setPage(1);
+      void runSearch(trimmed);
+    }, 500);
     return () => clearTimeout(t);
-  }, [query]);
+  }, [query, runSearch, setCompletion, stop]);
+
+  useEffect(() => {
+    return () => {
+      searchAbortRef.current?.abort();
+      stop();
+    };
+  }, [stop]);
 
   // AI trigger (manual)
-  const handleSearch = async () => {
-    if (query.trim().length < 2) return;
+  const handleSearch = useCallback(async () => {
+    const trimmed = query.trim();
+    if (trimmed.length < 2) return;
+    stop();
     setIsAITriggered(true);
     setCompletion('');
-    setIsLoadingResults(true);
-    let cur: any[] = [];
-    try {
-      const res = await fetch(`/api/search?q=${encodeURIComponent(query)}`);
-      const data = await res.json();
-      cur = (data.results || []).filter((r: any) => r?.url);
-      setResults(cur);
-    } catch (err) {
-      console.error('Search error:', err);
-    } finally {
-      setIsLoadingResults(false);
-    }
+    setHasSearched(true);
+    setPage(1);
+    
+    // Cancel any debounced search and run immediately
+    const cur = await runSearch(trimmed);
     if (cur.length > 0) {
-      complete(query, { body: { results: cur.slice(0, 4) } });
+      complete(trimmed, { body: { results: cur.slice(0, 4) } });
     }
-  };
+  }, [complete, query, runSearch, stop]);
 
   const handleKeyDown = useCallback((e: React.KeyboardEvent<HTMLInputElement>) => {
     if (e.key === 'Enter') handleSearch();
@@ -270,12 +343,17 @@ export default function Home() {
   // (which fires on DOM insertion and races with Framer Motion transitions).
   const compactInputRef = useRef<HTMLInputElement>(null);
 
+  // Keep focus alive on search input
   useEffect(() => {
+    if (!keepSearchFocusRef.current) return;
     if (isResultsMode) {
-      // requestAnimationFrame defers until after the browser has painted the
-      // new DOM node, so the compact input is guaranteed to exist.
       const raf = requestAnimationFrame(() => {
         compactInputRef.current?.focus();
+      });
+      return () => cancelAnimationFrame(raf);
+    } else {
+      const raf = requestAnimationFrame(() => {
+        heroInputRef.current?.focus();
       });
       return () => cancelAnimationFrame(raf);
     }
