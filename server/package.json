@@ -7,14 +7,18 @@
   "type": "module",
   "main": "dist/index.js",
   "scripts": {
-    "dev":        "tsx watch src/index.ts",
-    "build":      "tsc",
-    "start":      "node dist/index.js",
-    "crawl":      "tsx scripts/mega-crawl.ts",
-    "check":      "tsx scripts/check-count.ts"
+    "dev":         "tsx watch src/index.ts",
+    "build":       "tsc",
+    "start":       "node dist/index.js",
+    "crawl":       "tsx scripts/mega-crawl.ts",
+    "crawl:local": "tsx --env-file=../.env scripts/local-crawl.ts",
+    "push:cloud":  "tsx --env-file=../.env scripts/push-to-cloud.ts",
+    "check":       "tsx scripts/check-count.ts"
   },
   "dependencies": {
     "@neondatabase/serverless": "^1.0.2",
+    "@types/better-sqlite3": "^7.6.13",
+    "better-sqlite3": "^12.11.1",
     "cheerio": "^1.2.0",
     "cors": "^2.8.6",
     "dotenv": "^17.4.2",
