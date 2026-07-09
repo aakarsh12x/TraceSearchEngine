@@ -445,18 +445,26 @@ export default function Home() {
       </AnimatePresence>
 
 
-      {/* Background */}
-      <div className="absolute inset-0 overflow-hidden pointer-events-none opacity-70">
-        <Meteors number={10} minDuration={7} maxDuration={14} />
-      </div>
+      {/* Aurora green glow — slides down and fades when search activates */}
       <div
-        className="absolute inset-0 pointer-events-none"
+        className="fixed bottom-0 left-0 right-0 h-[38vh] overflow-hidden pointer-events-none select-none"
         style={{
-          background:
-            'radial-gradient(circle at 50% 0%, rgba(45,212,191,0.10), transparent 34rem), linear-gradient(#2a2d3426 1px, transparent 1px), linear-gradient(90deg, #2a2d3426 1px, transparent 1px)',
-          backgroundSize: 'auto, 64px 64px, 64px 64px',
+          zIndex: 1,
+          maskImage: 'linear-gradient(to top, black 0%, black 25%, transparent 100%)',
+          WebkitMaskImage: 'linear-gradient(to top, black 0%, black 25%, transparent 100%)',
+          transform: isResultsMode ? 'translateY(100%)' : 'translateY(0%)',
+          opacity: isResultsMode ? 0 : 1,
+          transition: `transform ${DUR}s cubic-bezier(0.32,0.72,0,1), opacity ${DUR * 0.8}s ease`,
+          willChange: 'transform, opacity',
         }}
-      />
+      >
+        <Aurora
+          colorStops={['#00ff88', '#34b857', '#2dd4bf']}
+          amplitude={1.4}
+          blend={0.5}
+          speed={0.7}
+        />
+      </div>
 
       {/* ── FIXED TOP BAR (results mode) ──────────────────────────────── */}
       <AnimatePresence>
