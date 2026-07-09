@@ -156,6 +156,12 @@ const TARGETS: Target[] = [
     'https://spring.io/guides',
     'https://docs.spring.io/spring-boot/docs/current/reference/html/',
   ]},
+  { source: 'bun', limit: 500, tags: ['bun','runtime','javascript'], seeds: [
+    'https://bun.sh/docs',
+  ]},
+  { source: 'deno', limit: 500, tags: ['deno','runtime','javascript','typescript'], seeds: [
+    'https://docs.deno.com/runtime/manual/',
+  ]},
 
   // Databases & ORM
   { source: 'postgresql', limit: 1200, tags: ['postgresql','sql'], seeds: [
@@ -221,6 +227,15 @@ const TARGETS: Target[] = [
   { source: 'netlify', limit: 300, tags: ['netlify','deployment'], seeds: [
     'https://docs.netlify.com/',
   ]},
+  { source: 'terraform', limit: 600, tags: ['terraform','iac','devops'], seeds: [
+    'https://developer.hashicorp.com/terraform/docs',
+  ]},
+  { source: 'prometheus', limit: 500, tags: ['prometheus','monitoring','devops'], seeds: [
+    'https://prometheus.io/docs/introduction/overview/',
+  ]},
+  { source: 'grafana', limit: 500, tags: ['grafana','monitoring','devops'], seeds: [
+    'https://grafana.com/docs/',
+  ]},
 
   // Build tools & Testing
   { source: 'vite', limit: 500, tags: ['vite','build'], seeds: [
@@ -243,6 +258,9 @@ const TARGETS: Target[] = [
   { source: 'playwright', limit: 500, tags: ['playwright','e2e'], seeds: [
     'https://playwright.dev/docs/intro',
   ]},
+  { source: 'cypress', limit: 500, tags: ['cypress','e2e','testing'], seeds: [
+    'https://docs.cypress.io/guides/overview/why-cypress',
+  ]},
 
   // CSS & UI
   { source: 'tailwind', limit: 700, tags: ['tailwind','css'], seeds: [
@@ -256,6 +274,15 @@ const TARGETS: Target[] = [
   ]},
   { source: 'mui', limit: 500, tags: ['mui','react','ui'], seeds: [
     'https://mui.com/material-ui/getting-started/',
+  ]},
+  { source: 'figma', limit: 400, tags: ['figma','api','design'], seeds: [
+    'https://www.figma.com/developers/api',
+  ]},
+  { source: 'radix-ui', limit: 400, tags: ['radix','react','ui'], seeds: [
+    'https://www.radix-ui.com/primitives/docs/overview/introduction',
+  ]},
+  { source: 'framer-motion', limit: 500, tags: ['framer-motion','animation','react','ui'], seeds: [
+    'https://www.framer.com/motion/',
   ]},
 
   // State, Auth, API
@@ -290,6 +317,15 @@ const TARGETS: Target[] = [
   ]},
   { source: 'openai', limit: 400, tags: ['openai','ai','api'], seeds: [
     'https://platform.openai.com/docs/',
+  ]},
+  { source: 'pandas', limit: 600, tags: ['pandas','python','data-science'], seeds: [
+    'https://pandas.pydata.org/docs/',
+  ]},
+  { source: 'numpy', limit: 600, tags: ['numpy','python','data-science'], seeds: [
+    'https://numpy.org/doc/stable/',
+  ]},
+  { source: 'scikit-learn', limit: 600, tags: ['scikit-learn','python','ml'], seeds: [
+    'https://scikit-learn.org/stable/',
   ]},
 
   // Security & Web Standards
