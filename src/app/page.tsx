@@ -2,7 +2,6 @@
 
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Meteors } from '@/components/ui/meteors';
 import { useCompletion } from '@ai-sdk/react';
 import ReactMarkdown from 'react-markdown';
 import { Terminal } from '@/components/ui/terminal';
@@ -10,6 +9,7 @@ import { ShimmerButton } from '@/components/ui/shimmer-button';
 import { TextAnimate } from '@/components/ui/text-animate';
 import { CanvasText } from '@/components/ui/canvas-text';
 import { NoiseBackground } from '@/components/ui/noise-background';
+import { Aurora } from '@/components/ui/aurora';
 
 // ─── Animation constants (module-level = zero re-creation cost per render) ────
 const EASE = [0.32, 0.72, 0, 1] as const;
@@ -68,6 +68,74 @@ function ArrowRightIcon({ className }: { className?: string }) {
   );
 }
 
+// ─── Mic icon ────────────────────────────────────────────────────────────────
+
+function MicIcon({ listening, small }: { listening: boolean; small?: boolean }) {
+  const size = small ? 'w-3.5 h-3.5' : 'w-4 h-4';
+  return (
+    <svg className={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <rect x="9" y="2" width="6" height="12" rx="3" />
+      <path d="M5 10a7 7 0 0 0 14 0" />
+      <line x1="12" y1="19" x2="12" y2="22" />
+      <line x1="8" y1="22" x2="16" y2="22" />
+    </svg>
+  );
+}
+
+// ─── Voice-to-text hook ───────────────────────────────────────────────────────
+
+function useSpeechSearch(onChange: (v: string) => void, onSearch: () => void) {
+  const [isListening, setIsListening] = useState(false);
+  const recognitionRef = useRef<SpeechRecognition | null>(null);
+
+  const supported = typeof window !== 'undefined' &&
+    ('SpeechRecognition' in window || 'webkitSpeechRecognition' in window);
+
+  const startListening = useCallback(() => {
+    if (!supported || isListening) return;
+    const SpeechRecognitionAPI =
+      (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
+    const rec: SpeechRecognition = new SpeechRecognitionAPI();
+    rec.lang = 'en-US';
+    rec.interimResults = true;
+    rec.maxAlternatives = 1;
+    rec.continuous = false;
+
+    rec.onstart = () => setIsListening(true);
+    rec.onend   = () => setIsListening(false);
+    rec.onerror = () => setIsListening(false);
+    rec.onresult = (e: SpeechRecognitionEvent) => {
+      let interim = '';
+      let final = '';
+      for (let i = e.resultIndex; i < e.results.length; i++) {
+        const t = e.results[i][0].transcript;
+        if (e.results[i].isFinal) final += t;
+        else interim += t;
+      }
+      const text = (final || interim).trim();
+      if (text) {
+        onChange(text);
+        if (final) setTimeout(() => onSearch(), 100);
+      }
+    };
+
+    recognitionRef.current = rec;
+    rec.start();
+  }, [supported, isListening, onChange, onSearch]);
+
+  const stopListening = useCallback(() => {
+    recognitionRef.current?.stop();
+    setIsListening(false);
+  }, []);
+
+  const toggle = useCallback(() => {
+    if (isListening) stopListening();
+    else startListening();
+  }, [isListening, startListening, stopListening]);
+
+  return { isListening, toggle, supported };
+}
+
 // ─── Shared search input ──────────────────────────────────────────────────────
 
 interface SearchInputProps {
@@ -89,6 +157,7 @@ function SearchInput({
   onSearch, isLoading, inputRef, autoFocus,
 }: SearchInputProps) {
   const canSearch = query.trim().length >= 2 && !isLoading;
+  const { isListening, toggle: toggleVoice, supported: voiceSupported } = useSpeechSearch(onChange, onSearch);
 
   return (
     <div className="relative w-full">
@@ -106,23 +175,61 @@ function SearchInput({
         placeholder={compact ? 'Search or ask anything…' : 'Ask anything (Press ↵ for AI)…'}
         className="w-full outline-none"
         style={{
-          // Only transition compositor-friendly properties, never 'all'
           transition: 'border-color 0.18s ease, box-shadow 0.18s ease, background-color 0.18s ease',
           borderRadius: '0.65rem',
           fontSize: compact ? '0.875rem' : '1rem',
           paddingLeft: '2.6rem',
-          paddingRight: '3.4rem',
+          paddingRight: voiceSupported ? '5.2rem' : '3.4rem',
           paddingTop: compact ? '0.55rem' : '1.2rem',
           paddingBottom: compact ? '0.55rem' : '1.2rem',
           backgroundColor: isFocused ? '#17181c' : '#111216',
-          border: `1px solid ${isFocused ? '#2dd4bf' : '#2a2d34'}`,
+          border: `1px solid ${
+            isListening ? 'rgba(239,68,68,0.7)' :
+            isFocused   ? '#2dd4bf' : '#2a2d34'
+          }`,
           color: '#fafafa',
-          boxShadow: isFocused
-            ? '0 0 0 3px rgba(45,212,191,0.12)'
-            : compact ? 'none' : '0 18px 60px rgba(0,0,0,0.32)',
+          boxShadow: isListening
+            ? '0 0 0 3px rgba(239,68,68,0.15)'
+            : isFocused
+              ? '0 0 0 3px rgba(45,212,191,0.12)'
+              : compact ? 'none' : '0 18px 60px rgba(0,0,0,0.32)',
         }}
       />
-      <div className="absolute right-1.5 top-1/2 -translate-y-1/2">
+
+      {/* Right-side button cluster */}
+      <div className="absolute right-1.5 top-1/2 -translate-y-1/2 flex items-center gap-1">
+        {/* Mic button */}
+        {voiceSupported && (
+          <motion.button
+            onClick={toggleVoice}
+            aria-label={isListening ? 'Stop listening' : 'Search by voice'}
+            className="flex items-center justify-center border-none outline-none relative"
+            style={{
+              width: compact ? '1.85rem' : '2.3rem',
+              height: compact ? '1.85rem' : '2.3rem',
+              borderRadius: compact ? '10px' : '12px',
+              backgroundColor: isListening ? 'rgba(239,68,68,0.15)' : 'rgba(255,255,255,0.03)',
+              color: isListening ? '#ef4444' : '#52525b',
+              cursor: 'pointer',
+            }}
+            whileHover={{ backgroundColor: isListening ? 'rgba(239,68,68,0.22)' : 'rgba(255,255,255,0.07)', scale: 1.05 }}
+            whileTap={{ scale: 0.92 }}
+            transition={{ type: 'spring', stiffness: 400, damping: 17 }}
+          >
+            {/* Pulsing ring when listening */}
+            {isListening && (
+              <motion.span
+                className="absolute inset-0 rounded-[10px]"
+                style={{ border: '1.5px solid rgba(239,68,68,0.5)' }}
+                animate={{ scale: [1, 1.35, 1], opacity: [0.7, 0, 0.7] }}
+                transition={{ duration: 1.2, repeat: Infinity, ease: 'easeInOut' }}
+              />
+            )}
+            <MicIcon listening={isListening} small={compact} />
+          </motion.button>
+        )}
+
+        {/* Submit button */}
         {isLoading ? (
           <div className={`spinner ${compact ? '' : 'mr-1'}`} />
         ) : (
@@ -145,9 +252,7 @@ function SearchInput({
               boxShadow: '0 0 15px rgba(45, 212, 191, 0.5)',
               scale: 1.05,
             } : {}}
-            whileTap={canSearch ? {
-              scale: 0.95,
-            } : {}}
+            whileTap={canSearch ? { scale: 0.95 } : {}}
             transition={{ type: 'spring', stiffness: 400, damping: 17 }}
           >
             <ArrowRightIcon className={`opacity-90 ${compact ? 'w-3.5 h-3.5' : 'w-4 h-4'}`} />
@@ -445,6 +550,9 @@ export default function Home() {
       </AnimatePresence>
 
 
+
+
+
       {/* Aurora green glow — slides down and fades when search activates */}
       <div
         className="fixed bottom-0 left-0 right-0 h-[38vh] overflow-hidden pointer-events-none select-none"
@@ -465,6 +573,7 @@ export default function Home() {
           speed={0.7}
         />
       </div>
+
 
       {/* ── FIXED TOP BAR (results mode) ──────────────────────────────── */}
       <AnimatePresence>
