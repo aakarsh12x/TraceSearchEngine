@@ -541,12 +541,11 @@ export default function Home() {
         className="relative z-10 flex flex-col items-center px-4 w-full min-h-screen justify-start"
         style={{
           paddingTop: isResultsMode ? '5rem' : 'calc(50vh - 180px)',
-          transition: `padding-top ${DUR}s cubic-bezier(0.32, 0.72, 0, 1)`,
         }}
       >
 
-        {/* HERO — smoothly floats up and fades out when typing starts */}
-        <AnimatePresence mode="wait">
+        {/* HERO — floats up and fades out when typing starts */}
+        <AnimatePresence mode="popLayout">
           {!isResultsMode && (
             <motion.div
               key="hero"
@@ -641,10 +640,10 @@ export default function Home() {
           <AnimatePresence>
             {isResultsMode && (
               <motion.div
-                initial={{ opacity: 0, y: 10 }}
-                animate={{ opacity: 1, y: 0 }}
-                exit={{ opacity: 0, y: 6 }}
-                transition={{ duration: 0.24, ease: 'easeOut' }}
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+                exit={{ opacity: 0 }}
+                transition={{ duration: 0.2, ease: 'easeOut' }}
                 className="w-full mt-4 relative z-10"
                 style={{ willChange: 'opacity, transform' }}
               >
@@ -682,9 +681,9 @@ export default function Home() {
 
               return (
                 <motion.div
-                  initial={{ opacity: 0, y: 16 }}
-                  animate={{ opacity: 1, y: 0 }}
-                  transition={{ duration: 0.24, ease: 'easeOut' }}
+                  initial={{ opacity: 0 }}
+                  animate={{ opacity: 1 }}
+                  transition={{ duration: 0.22, ease: 'easeOut' }}
                   className="w-full mt-4 relative z-0"
                 >
                   {/* Header row */}
