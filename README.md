@@ -4,7 +4,7 @@
 
 Trace indexes technical documentation, Stack Overflow threads, GitHub repositories, and developer-focused content — surfacing results in under a millisecond with a neural inference layer that synthesizes answers from the top results in real time.
 
-<img width="1919" height="908" alt="image" src="https://github.com/user-attachments/assets/bea677c7-f9ea-4daf-8959-b75d1d1fa635" />
+<img width="1918" height="909" alt="image" src="https://github.com/user-attachments/assets/74fdac2c-e3fc-48ec-bd76-fbe1db4bb2cf" />
 <img width="1919" height="906" alt="Results view" src="https://github.com/user-attachments/assets/db03ef5b-3af5-4960-8e89-cd5261ffca7a" />
 <img width="1910" height="909" alt="AI terminal" src="https://github.com/user-attachments/assets/a8da18bd-524c-4e90-8c22-955c0f340f78" />
 
