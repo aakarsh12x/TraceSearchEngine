@@ -15,6 +15,9 @@
  *   CONTENT_LIMIT     = 4,000 chars (enforced in crawler)
  */
 
+import dotenv from 'dotenv';
+dotenv.config({ path: '../.env' });
+
 import { crawl, prewarmDedup } from '../src/crawler.js';
 import { syncIndex } from '../src/index-manager.js';
 import { sql } from '../src/db.js';
@@ -267,7 +270,7 @@ const TARGETS: CrawlTarget[] = [
   // ── Blogs (strict combined limit 4,000) ─────────────────────────────────
   {
     source: 'blogs',
-    limit: 4000,
+    limit: 1000,
     tags: ['blog', 'tutorial', 'programming'],
     concurrency: 2,
     seeds: [
@@ -278,6 +281,74 @@ const TARGETS: CrawlTarget[] = [
       'https://blog.logrocket.com',
       'https://smashingmagazine.com',
     ],
+  },
+
+  // ── NEW DIVERSE CRAWL TARGETS ──────────────────────────────────────────
+  {
+    source: 'cppreference',
+    limit: 1000,
+    tags: ['cpp', 'c++', 'c'],
+    seeds: ['https://en.cppreference.com/w/'],
+  },
+  {
+    source: 'microsoft-docs',
+    limit: 1000,
+    tags: ['csharp', '.net', 'microsoft'],
+    seeds: ['https://learn.microsoft.com/en-us/dotnet/csharp/'],
+  },
+  {
+    source: 'java',
+    limit: 1000,
+    tags: ['java', 'oracle', 'jvm'],
+    seeds: ['https://docs.oracle.com/en/java/'],
+  },
+  {
+    source: 'php',
+    limit: 800,
+    tags: ['php', 'backend'],
+    seeds: ['https://www.php.net/manual/en/'],
+  },
+  {
+    source: 'swift',
+    limit: 800,
+    tags: ['swift', 'ios', 'apple'],
+    seeds: ['https://docs.swift.org/swift-book/'],
+  },
+  {
+    source: 'rust',
+    limit: 1000,
+    tags: ['rust', 'systems'],
+    seeds: ['https://doc.rust-lang.org/book/'],
+  },
+  {
+    source: 'go',
+    limit: 1000,
+    tags: ['go', 'golang'],
+    seeds: ['https://go.dev/doc/'],
+  },
+  {
+    source: 'linux',
+    limit: 800,
+    tags: ['linux', 'bash', 'unix', 'shell'],
+    seeds: ['https://man7.org/linux/man-pages/'],
+  },
+  {
+    source: 'aws',
+    limit: 1000,
+    tags: ['aws', 'cloud', 'infrastructure'],
+    seeds: ['https://docs.aws.amazon.com/'],
+  },
+  {
+    source: 'stripe',
+    limit: 500,
+    tags: ['stripe', 'payments', 'api'],
+    seeds: ['https://docs.stripe.com/'],
+  },
+  {
+    source: 'github-actions',
+    limit: 500,
+    tags: ['github', 'actions', 'ci', 'cd'],
+    seeds: ['https://docs.github.com/en/actions'],
   },
 ];
 
