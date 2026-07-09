@@ -39,3 +39,11 @@ Thumbs.db
 .idea/
 *.swp
 *.swo
+
+# ── Local DB and Scratches ────────────────────────────
+*.sqlite
+*.sqlite-shm
+*.sqlite-wal
+test-output.txt
+page.tsx.final
+
