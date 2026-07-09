@@ -86,16 +86,21 @@ function MicIcon({ listening, small }: { listening: boolean; small?: boolean }) 
 
 function useSpeechSearch(onChange: (v: string) => void, onSearch: () => void) {
   const [isListening, setIsListening] = useState(false);
-  const recognitionRef = useRef<SpeechRecognition | null>(null);
+  const [supported, setSupported] = useState(false);
+  const recognitionRef = useRef<any>(null);
 
-  const supported = typeof window !== 'undefined' &&
-    ('SpeechRecognition' in window || 'webkitSpeechRecognition' in window);
+  useEffect(() => {
+    if (typeof window !== 'undefined' &&
+      ('SpeechRecognition' in window || 'webkitSpeechRecognition' in window)) {
+      setSupported(true);
+    }
+  }, []);
 
   const startListening = useCallback(() => {
     if (!supported || isListening) return;
     const SpeechRecognitionAPI =
       (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
-    const rec: SpeechRecognition = new SpeechRecognitionAPI();
+    const rec = new SpeechRecognitionAPI() as any;
     rec.lang = 'en-US';
     rec.interimResults = true;
     rec.maxAlternatives = 1;
@@ -104,7 +109,7 @@ function useSpeechSearch(onChange: (v: string) => void, onSearch: () => void) {
     rec.onstart = () => setIsListening(true);
     rec.onend   = () => setIsListening(false);
     rec.onerror = () => setIsListening(false);
-    rec.onresult = (e: SpeechRecognitionEvent) => {
+    rec.onresult = (e: any) => {
       let interim = '';
       let final = '';
       for (let i = e.resultIndex; i < e.results.length; i++) {
