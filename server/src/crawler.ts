@@ -141,7 +141,7 @@ export async function crawl(seedUrl: string, options: CrawlerOptions) {
   let pagesProcessed = 0;
   let activeWorkers = 0;
 
-  console.log(`\n🌐 Starting crawl: [${options.source}] ${seedUrl} (limit: ${options.maxPages})`);
+  console.log(`\n[CRAWL] Starting crawl: [${options.source}] ${seedUrl} (limit: ${options.maxPages})`);
 
   const browser: Browser = await puppeteer.launch({
     headless: true,
@@ -286,7 +286,7 @@ export async function crawl(seedUrl: string, options: CrawlerOptions) {
         // swallow per-page errors, only log non-timeout ones
         const msg = (err as Error).message;
         if (!msg.includes('Timeout') && !msg.includes('Navigation')) {
-          console.warn(`  ✗ ${item.url}: ${msg.slice(0, 80)}`);
+          console.warn(`  [ERR] ${item.url}: ${msg.slice(0, 80)}`);
         }
       } finally {
         if (page) await page.close().catch(() => {});
@@ -300,11 +300,11 @@ export async function crawl(seedUrl: string, options: CrawlerOptions) {
   while (activeWorkers > 0) await delay(150);
   await browser.close();
 
-  console.log(`✅ Done [${options.source}]: ${pagesProcessed} pages saved`);
+  console.log(`[CRAWL] Done [${options.source}]: ${pagesProcessed} pages saved`);
 
   // Rebuild the full index from DB so every page (including deduped ones) is correctly indexed
   if (pagesProcessed > 0) {
-    console.log('🔄 Triggering full index re-sync after crawl...');
+    console.log('[CRAWL] Triggering full index re-sync after crawl...');
     await syncIndex().catch(err => console.error('Post-crawl syncIndex failed:', err));
   }
 

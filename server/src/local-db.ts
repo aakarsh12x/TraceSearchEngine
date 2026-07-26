@@ -65,7 +65,7 @@ export function prewarmFromLocal(urlSet: Set<string>, hashSet: Set<string>): voi
     urlSet.add(r.url);
     if (r.content_hash) hashSet.add(r.content_hash);
   }
-  console.log(`📦 Local SQLite pre-warm: ${urlSet.size} URLs, ${hashSet.size} hashes`);
+  console.log(`Local SQLite pre-warm: ${urlSet.size} URLs, ${hashSet.size} hashes`);
 }
 
 /** Count total pages in local DB */

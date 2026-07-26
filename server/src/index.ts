@@ -105,12 +105,12 @@ app.post("/crawler/reddit", async (req, res) => {
 
 // Admin endpoint to re-sync FlexSearch index from DB without restarting
 app.post("/admin/resync", async (req, res) => {
-  console.log("\n🔄 Manual re-sync triggered via /admin/resync...");
+  console.log("\n[RE-SYNC] Manual re-sync triggered via /admin/resync...");
   try {
     await forceSync(); // always rebuilds from DB, ignores disk cache
     res.json({ message: "Index re-synced successfully from database." });
   } catch (err) {
-    console.error("❌ Re-sync failed:", err);
+    console.error("[ERROR] Re-sync failed:", err);
     res.status(500).json({ error: "Re-sync failed" });
   }
 });
@@ -123,29 +123,29 @@ function startSelfPing(baseUrl: string): void {
 
   setInterval(async () => {
     if (!isActiveHours()) {
-      console.log(`💤 [${new Date().toISOString()}] Off-hours (IST ${getISTHour()}:xx) — skipping self-ping to allow idle.`);
+      console.log(`[IDLE] [${new Date().toISOString()}] Off-hours (IST ${getISTHour()}:xx) — skipping self-ping to allow idle.`);
       return;
     }
     try {
       const res = await fetch(`${baseUrl}/health`);
       const data = await res.json() as { status: string; istHour: number };
-      console.log(`✅ [${new Date().toISOString()}] Self-ping OK — IST hour: ${data.istHour}, status: ${data.status}`);
+      console.log(`[OK] [${new Date().toISOString()}] Self-ping OK — IST hour: ${data.istHour}, status: ${data.status}`);
     } catch (err) {
-      console.error(`❌ [${new Date().toISOString()}] Self-ping failed:`, err);
+      console.error(`[ERROR] [${new Date().toISOString()}] Self-ping failed:`, err);
     }
   }, INTERVAL_MS);
 
-  console.log(`⏰ Self-ping scheduler started — active 09:00–21:00 IST, silent 21:00–09:00 IST`);
+  console.log(`[SCHEDULER] Self-ping scheduler started — active 09:00–21:00 IST, silent 21:00–09:00 IST`);
 }
 
 // Sync index at setup time
 app.listen(PORT, async () => {
-  console.log(`\n🚀 Backend Server initialized on port ${PORT}`);
-  console.log(`📡 Current Time: ${new Date().toISOString()}`);
-  console.log(`🕐 Current IST Hour: ${getISTHour()}`);
+  console.log(`\nBackend Server initialized on port ${PORT}`);
+  console.log(`Current Time: ${new Date().toISOString()}`);
+  console.log(`Current IST Hour: ${getISTHour()}`);
   await syncIndex();
   indexReady = true;
-  console.log(`✅ Index is ready — /status will now return { indexReady: true }`);
+  console.log(`Index is ready — /status will now return { indexReady: true }`);
 
   // Start self-ping using the public Render URL (or localhost for dev)
   const selfUrl = process.env.RENDER_EXTERNAL_URL || `http://localhost:${PORT}`;

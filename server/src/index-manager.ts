@@ -88,10 +88,10 @@ async function saveIndexToDisk(docCount: number): Promise<void> {
       savedAt: new Date().toISOString(),
     }));
 
-    console.log(`💾 Index cache saved (${docCount} docs, ${Object.keys(chunks).length} chunks)`);
+    console.log(`[CACHE] Index cache saved (${docCount} docs, ${Object.keys(chunks).length} chunks)`);
   } catch (err) {
     // Non-fatal — worst case we rebuild next time
-    console.warn('⚠️  Could not save index cache:', err);
+    console.warn('[WARN] Could not save index cache:', err);
   }
 }
 
@@ -104,11 +104,11 @@ async function loadIndexFromDisk(currentDbCount?: number): Promise<boolean> {
 
     // Stale check — only possible when caller already knows the DB count
     if (currentDbCount !== undefined && meta.docCount !== currentDbCount) {
-      console.log(`🔄 Cache stale (cached ${meta.docCount}, DB has ${currentDbCount}) — rebuilding…`);
+      console.log(`[CACHE] Cache stale (cached ${meta.docCount}, DB has ${currentDbCount}) — rebuilding…`);
       return false;
     }
 
-    console.log(`\n⚡ Loading index from disk cache (${meta.docCount} docs, saved ${meta.savedAt})…`);
+    console.log(`\n[CACHE] Loading index from disk cache (${meta.docCount} docs, saved ${meta.savedAt})…`);
 
     index = createIndex();
 
@@ -145,10 +145,10 @@ async function loadIndexFromDisk(currentDbCount?: number): Promise<boolean> {
       }
     }
 
-    console.log(`✅ Index loaded from cache in milliseconds.\n`);
+    console.log(`[OK] Index loaded from cache in milliseconds.\n`);
     return true;
   } catch (err) {
-    console.warn('⚠️  Cache load failed, falling back to DB rebuild:', err);
+    console.warn('[WARN] Cache load failed, falling back to DB rebuild:', err);
     index = createIndex();
     return false;
   }
@@ -168,7 +168,7 @@ export async function syncIndex() {
   index = createIndex();
   contentCache.clear();
 
-  console.log(`\n📚 Building index from DB: ${total} pages…`);
+  console.log(`\n[INDEX] Building index from DB: ${total} pages…`);
 
   const CHUNK_SIZE = 1000;
   let offset = 0;
@@ -190,10 +190,10 @@ export async function syncIndex() {
 
     synced += rows.length;
     offset  += CHUNK_SIZE;
-    console.log(`   ✓ ${synced}/${total} indexed`);
+    console.log(`   [OK] ${synced}/${total} indexed`);
   }
 
-  console.log(`✅ Index ready: ${synced} pages loaded.\n`);
+  console.log(`[INDEX] Index ready: ${synced} pages loaded.\n`);
 
   // Persist to disk so next startup is instant
   await saveIndexToDisk(synced);
@@ -205,7 +205,7 @@ export async function forceSync() {
   const total = Number(countRes[0].c);
   index = createIndex();
   contentCache.clear();
-  console.log(`\n🔄 Force-rebuilding index from DB: ${total} pages…`);
+  console.log(`\n[REBUILD] Force-rebuilding index from DB: ${total} pages…`);
   const CHUNK_SIZE = 1000;
   let offset = 0;
   let synced = 0;
@@ -222,7 +222,7 @@ export async function forceSync() {
     synced += rows.length;
     offset += CHUNK_SIZE;
   }
-  console.log(`✅ Force-sync done: ${synced} pages.\n`);
+  console.log(`[INDEX] Force-sync done: ${synced} pages.\n`);
   await saveIndexToDisk(synced);
 }
 
@@ -419,7 +419,7 @@ export async function search(query: string): Promise<{ results: any[]; total: nu
     }
 
     if (fuzzyUrlSet.size > 0)
-      console.log(`   🔀 Fuzzy pass 2 (typo variants): +${fuzzyUrlSet.size} new candidates`);
+      console.log(`   [FUZZY] Fuzzy pass 2 (typo variants): +${fuzzyUrlSet.size} new candidates`);
   }
 
   // ── Pass 3: phonetic skeleton (last resort) ──────────────────────────────
@@ -444,7 +444,7 @@ export async function search(query: string): Promise<{ results: any[]; total: nu
       for (const url of urlsNow.slice(beforeSize)) fuzzyUrlSet.add(url);
 
       if (added > 0)
-        console.log(`   🔀 Fuzzy pass 3 (phonetic): +${added} new candidates`);
+        console.log(`   [FUZZY] Fuzzy pass 3 (phonetic): +${added} new candidates`);
     }
   }
   const t3End = Date.now();
