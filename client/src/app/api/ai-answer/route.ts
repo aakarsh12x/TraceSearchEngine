@@ -46,13 +46,37 @@ function generateFollowUps(query: string, results: WebSearchResult[]): string[] 
 }
 
 function generateConcepts(query: string, results: WebSearchResult[]): string[] {
-  const q = query.toLowerCase();
-  if (q.includes('docker')) return ['Docker Daemon', 'systemctl', 'Container Image', 'Volume Mounting'];
-  if (q.includes('react')) return ['Virtual DOM', 'useState Hook', 'Component Lifecycle', 'Reconciliation'];
-  if (q.includes('node') || q.includes('express')) return ['Event Loop', 'Express Middleware', 'Worker Threads', 'Non-blocking I/O'];
-  if (q.includes('python')) return ['Virtual Environment', 'asyncio', 'GIL (Global Interpreter Lock)', 'Package Index'];
-  const topic = query.replace(/^(how to|what is|how do i|running|learn|guide for)\s+/i, '').trim();
-  return [topic, 'Configuration', 'CLI Command', 'Architecture'];
+  const concepts: string[] = [];
+  const q = query.trim();
+  const qLower = q.toLowerCase();
+
+  if (qLower.includes('docker')) return ['Docker Daemon', 'Container Image', 'Volume Mounting', 'Docker Compose'];
+  if (qLower.includes('react')) return ['Virtual DOM', 'useState Hook', 'Component Lifecycle', 'Reconciliation'];
+  if (qLower.includes('node') || qLower.includes('express')) return ['Event Loop', 'Express Middleware', 'Worker Threads', 'Non-blocking I/O'];
+  if (qLower.includes('python')) return ['Virtual Environment', 'asyncio', 'GIL Lock', 'Package Index'];
+
+  // Add the user query term
+  concepts.push(q);
+
+  // Extract titles and key terms from live search results
+  results.forEach(r => {
+    if (r.title) {
+      const cleanTitle = r.title.split(/[-|:–—]/)[0].trim();
+      if (cleanTitle && cleanTitle.length < 35 && !concepts.includes(cleanTitle)) {
+        concepts.push(cleanTitle);
+      }
+    }
+  });
+
+  // Extract individual main terms if needed
+  const terms = q.split(/\s+/).filter(w => w.length > 2 && !/^(vs|versus|and|the|for|with|how|what|why|in|on|at|of|to|is|are)$/i.test(w));
+  terms.forEach(t => {
+    if (concepts.length < 4 && !concepts.includes(t)) {
+      concepts.push(t.charAt(0).toUpperCase() + t.slice(1));
+    }
+  });
+
+  return Array.from(new Set(concepts)).slice(0, 4);
 }
 
 export async function POST(req: Request) {

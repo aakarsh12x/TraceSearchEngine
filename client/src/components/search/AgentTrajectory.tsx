@@ -35,14 +35,31 @@ export function parseAgentCompletion(rawText: string): {
   let followUps: string[] = [];
   let concepts: string[] = [];
 
-  const sourcesMatch = rawText.match(/\[\[SOURCES:([\s\S]*?)\]\]/);
+  const sourcesMatch = rawText.match(/\[\[SOURCES:([\s\S]*?)\]\]/) || rawText.match(/\[\[SOURCES:([\s\S]*)/);
   if (sourcesMatch) {
     try {
-      const parsed = JSON.parse(sourcesMatch[1]);
-      sources = parsed.sources || [];
+      let jsonStr = sourcesMatch[1].trim();
+      if (jsonStr.endsWith(']]')) jsonStr = jsonStr.slice(0, -2);
+      const parsed = JSON.parse(jsonStr);
+      if (Array.isArray(parsed.sources)) sources = parsed.sources;
       if (Array.isArray(parsed.followUps)) followUps = parsed.followUps;
       if (Array.isArray(parsed.concepts)) concepts = parsed.concepts;
-    } catch {}
+    } catch {
+      // Regex fallback for partial streaming JSON string
+      const urlMatches = Array.from(sourcesMatch[1].matchAll(/"url"\s*:\s*"([^"]+)"/g));
+      const titleMatches = Array.from(sourcesMatch[1].matchAll(/"title"\s*:\s*"([^"]+)"/g));
+      const fallbackSources: Source[] = [];
+      urlMatches.forEach((m, i) => {
+        if (m[1] && m[1].startsWith('http')) {
+          fallbackSources.push({
+            url: m[1],
+            title: titleMatches[i]?.[1] || m[1],
+            snippet: '',
+          });
+        }
+      });
+      if (fallbackSources.length > 0) sources = fallbackSources;
+    }
   }
 
   const statusMatch = rawText.match(/\[\[STATUS:([^\]]+)\]\]/);

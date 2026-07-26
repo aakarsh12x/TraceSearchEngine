@@ -118,8 +118,8 @@ export async function searchLiveWeb(query: string, maxResults = 5): Promise<WebS
       } catch { /* fall through */ }
     }
 
-    // Tier 4: Bing HTML scraping — most reliable server-side fallback
-    if (results.length < 2) {
+    // Tier 4: Bing HTML scraping — resolves real target URLs from Bing redirect wrappers
+    if (results.length < maxResults) {
       try {
         const bingUrl = `https://www.bing.com/search?q=${encodeURIComponent(query)}&count=${maxResults * 2}`;
         const bingResp = await fetch(bingUrl, {
@@ -132,19 +132,52 @@ export async function searchLiveWeb(query: string, maxResults = 5): Promise<WebS
         if (bingResp.ok) {
           const html = await bingResp.text();
           const $ = cheerio.load(html);
-          // Bing result selectors: li.b_algo
           $('li.b_algo').each((_, el) => {
             if (results.length >= maxResults) return false;
             const titleEl = $(el).find('h2 a');
-            const url = titleEl.attr('href') || '';
+            let url = titleEl.attr('href') || '';
             const title = titleEl.text().trim();
             const snippet = $(el).find('.b_caption p, .b_algoSlug').first().text().trim();
-            if (url && title && url.startsWith('http')) {
+
+            // Decode Bing redirect wrapper URL (e.g. /ck/a?!&&p=...&u=a1aHR0cHM...)
+            if (url.includes('bing.com/ck/a')) {
+              try {
+                const uParam = new URL(url).searchParams.get('u');
+                if (uParam) {
+                  const raw = uParam.startsWith('a1') ? uParam.slice(2) : uParam;
+                  const decoded = Buffer.from(raw, 'base64url').toString('utf-8');
+                  if (decoded.startsWith('http')) url = decoded;
+                }
+              } catch {}
+            }
+
+            if (url && title && url.startsWith('http') && !url.includes('bing.com/ck/a')) {
               results.push({ title, url, snippet, source: 'web' });
             }
           });
         }
       } catch { /* fall through */ }
+    }
+
+    // Tier 5: Wikipedia Search API fallback for entity/model queries if web results are empty
+    if (results.length === 0) {
+      try {
+        const wikiUrl = `https://en.wikipedia.org/w/api.php?action=query&list=search&srsearch=${encodeURIComponent(query)}&format=json&origin=*`;
+        const wikiResp = await fetch(wikiUrl);
+        if (wikiResp.ok) {
+          const data = await wikiResp.json();
+          const wikiItems = data.query?.search || [];
+          wikiItems.slice(0, 3).forEach((item: any) => {
+            const cleanSnippet = (item.snippet || '').replace(/<[^>]*>/g, '').trim();
+            results.push({
+              title: item.title,
+              url: `https://en.wikipedia.org/wiki/${encodeURIComponent(item.title.replace(/\s+/g, '_'))}`,
+              snippet: cleanSnippet || item.title,
+              source: 'web',
+            });
+          });
+        }
+      } catch {}
     }
 
   } catch (error) {
