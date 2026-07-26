@@ -1,6 +1,7 @@
-import { streamText } from 'ai';
+import { streamText, tool, stepCountIs } from 'ai';
 import { createOpenAI } from '@ai-sdk/openai';
-import { searchLiveWeb, triggerAutoIndex, WebSearchResult } from '@/lib/tools/agent-tools';
+import { z } from 'zod';
+import { searchLiveWeb, fetchPageContent, triggerAutoIndex, WebSearchResult } from '@/lib/tools/agent-tools';
 
 function generateFollowUps(query: string, results: WebSearchResult[]): string[] {
   const q = query.toLowerCase();
@@ -87,9 +88,9 @@ export async function POST(req: Request) {
     const encoder = new TextEncoder();
 
     if (searchMode === 'agentic') {
-      // ── AGENTIC LIVE WEB SEARCH MODE (1500 Tokens Max) ───────────────────
+      // ── AGENTIC REACT MULTI-STEP TOOL-CALLING MODE ─────────────────────────
 
-      // Parallel dual-query web search for rich retrieval
+      // Initial parallel discovery search to retrieve fast sources
       const variation = `${currentQuery} guide tutorial`;
       const [primary, secondary] = await Promise.all([
         searchLiveWeb(currentQuery, 4),
@@ -103,7 +104,7 @@ export async function POST(req: Request) {
       });
       const webResults = Array.from(seen.values()).slice(0, 6);
 
-      // Background indexing — non-blocking
+      // Trigger background indexing — non-blocking
       triggerAutoIndex(webResults.map(r => r.url));
 
       // Generate follow-up questions & key concepts
@@ -120,27 +121,26 @@ export async function POST(req: Request) {
         followUps: followUpQuestions,
         concepts: keyConcepts,
       });
-      const header = `[[SOURCES:${sourcesPayload}]]\n[[STATUS:Searching the web for "${currentQuery}"]]\n\n`;
+      const header = `[[SOURCES:${sourcesPayload}]]\n[[STATUS:Autonomous agent inspecting sources for "${currentQuery}"]]\n\n`;
 
-      // Numbered sources for the LLM context
+      // Formatted initial context for the agent
       const numberedSources = webResults
-        .map((r, i) => `[${i + 1}] ${r.title}\n${r.snippet}`)
+        .map((r, i) => `[${i + 1}] ${r.title}\nURL: ${r.url}\nSnippet: ${r.snippet}`)
         .join('\n\n');
 
-      const systemPrompt = `You are Trace, an intelligent AI web search engine.
+      const systemPrompt = `You are Trace, an autonomous multi-step AI developer research agent.
 
-The user is asking: "${currentQuery}"
+USER QUERY: "${currentQuery}"
 
-RETRIEVED LIVE WEB SOURCES:
+INITIAL WEB SOURCES:
 ${numberedSources || 'No web results.'}
 
 CRITICAL INSTRUCTIONS:
-1. Answer the user's query directly and thoroughly using the web sources.
-2. Include full, working code examples where helpful.
+1. Answer the user's query thoroughly using the web sources and tools.
+2. If initial snippets are insufficient, use the tool 'fetch_full_page' to read deep documentation.
 3. Cite sources inline using numbered brackets like [1], [2] immediately after factual claims.
-4. Do NOT include preambles like "Based on the web sources...". Start directly with the answer.`;
+4. Include clean, working code blocks with language tags. Do NOT include preambles like "Based on web sources...".`;
 
-      // Build message array with conversation history if available
       const formattedMessages = messages.length > 0
         ? messages.map((m: any) => ({
             role: m.role === 'user' ? ('user' as const) : ('assistant' as const),
@@ -148,10 +148,34 @@ CRITICAL INSTRUCTIONS:
           }))
         : [{ role: 'user' as const, content: currentQuery }];
 
+      // Multi-step streaming ReAct agent execution (stopWhen: stepCountIs(5))
       const aiResult = await streamText({
         model: nvidiaClient.chat('meta/llama-3.1-70b-instruct'),
         system: systemPrompt,
         messages: formattedMessages,
+        stopWhen: stepCountIs(5),
+        tools: {
+          search_web: tool({
+            description: 'Search the live web for real-time documentation, libraries, or code examples.',
+            inputSchema: z.object({ query: z.string().describe('The search query') }),
+            execute: async ({ query }) => {
+              const searchRes = await searchLiveWeb(query, 4);
+              return { results: searchRes };
+            },
+          }),
+          fetch_full_page: tool({
+            description: 'Fetch and read raw text and code snippets from a specific web URL.',
+            inputSchema: z.object({ url: z.string().describe('The web URL to inspect') }),
+            execute: async ({ url }) => {
+              const pageData = await fetchPageContent(url);
+              return {
+                title: pageData.title,
+                content: pageData.content.slice(0, 3500),
+                codeSnippets: pageData.codeSnippets.slice(0, 3),
+              };
+            },
+          }),
+        },
         maxOutputTokens: 1500,
       });
 
