@@ -6,6 +6,15 @@ import { searchLiveWeb, triggerAutoIndex, WebSearchResult } from '@/lib/tools/ag
 export const dynamic = 'force-dynamic';
 export const runtime = 'nodejs';
 
+function cleanSearchQuery(rawQuery: string): string {
+  let q = rawQuery.trim();
+  // Strip conversational prefixes and typo request phrasing (tell/rell/cell/talk/explain/show/give/find/search)
+  q = q.replace(/^(?:can\s+you|please|could\s+you|i\s+want\s+to|i\s+need\s+to|help\s+me|kindly|would\s+you)?\s*(?:tell|rell|cell|talk|explain|show|give|find|search|lookup|get|fetch|describe|detail|summarize|provide)\s+(?:me\s+)?(?:about|on|for|with|regarding|to|an?\s+overview\s+of|details?\s+on|information\s+on)?\s+/i, '');
+  // Strip "what is", "who is", "where is", "how do i", "how to"
+  q = q.replace(/^(?:what\s+is|what\s+are|who\s+is|where\s+is|how\s+does|how\s+do\s+i|how\s+to|can\s+you\s+explain|give\s+me|overview\s+of|details\s+on)\s+/i, '');
+  return q.trim() || rawQuery.trim();
+}
+
 function generateFollowUps(query: string, results: WebSearchResult[]): string[] {
   const q = query.toLowerCase();
   if (q.includes('docker')) {
@@ -36,27 +45,27 @@ function generateFollowUps(query: string, results: WebSearchResult[]): string[] 
       'How do I build production-ready REST APIs with FastAPI?'
     ];
   }
-  const topic = query.replace(/^(how to|what is|how do i|running|learn|guide for)\s+/i, '').trim();
+  const topic = cleanSearchQuery(query);
   const topTitle = results[0]?.title ? results[0].title.split(/[-|:]/)[0].trim() : topic;
   return [
-    `What are the most common errors when working with ${topic}?`,
-    `Can you provide a practical code example for ${topic}?`,
+    `What are the primary use cases and key features of ${topic}?`,
+    `Can you provide a practical example or setup guide for ${topic}?`,
     `How does ${topTitle} compare to alternative solutions?`
   ];
 }
 
 function generateConcepts(query: string, results: WebSearchResult[]): string[] {
   const concepts: string[] = [];
-  const q = query.trim();
-  const qLower = q.toLowerCase();
+  const cleanQ = cleanSearchQuery(query);
+  const qLower = cleanQ.toLowerCase();
 
   if (qLower.includes('docker')) return ['Docker Daemon', 'Container Image', 'Volume Mounting', 'Docker Compose'];
   if (qLower.includes('react')) return ['Virtual DOM', 'useState Hook', 'Component Lifecycle', 'Reconciliation'];
   if (qLower.includes('node') || qLower.includes('express')) return ['Event Loop', 'Express Middleware', 'Worker Threads', 'Non-blocking I/O'];
   if (qLower.includes('python')) return ['Virtual Environment', 'asyncio', 'GIL Lock', 'Package Index'];
 
-  // Add the user query term
-  concepts.push(q);
+  // Add the cleaned query term first
+  concepts.push(cleanQ.charAt(0).toUpperCase() + cleanQ.slice(1));
 
   // Extract titles and key terms from live search results
   results.forEach(r => {
@@ -69,7 +78,7 @@ function generateConcepts(query: string, results: WebSearchResult[]): string[] {
   });
 
   // Extract individual main terms if needed
-  const terms = q.split(/\s+/).filter(w => w.length > 2 && !/^(vs|versus|and|the|for|with|how|what|why|in|on|at|of|to|is|are)$/i.test(w));
+  const terms = cleanQ.split(/\s+/).filter(w => w.length > 2 && !/^(vs|versus|and|the|for|with|how|what|why|in|on|at|of|to|is|are)$/i.test(w));
   terms.forEach(t => {
     if (concepts.length < 4 && !concepts.includes(t)) {
       concepts.push(t.charAt(0).toUpperCase() + t.slice(1));
@@ -88,6 +97,8 @@ export async function POST(req: Request) {
     }
 
     const currentQuery = prompt || messages[messages.length - 1]?.content || '';
+    const cleanedQuery = cleanSearchQuery(currentQuery);
+
     const apiKey = process.env.NVIDIA_KEY;
     if (!apiKey) return new Response('NVIDIA_KEY environment variable is not set', { status: 500 });
 
@@ -107,18 +118,24 @@ export async function POST(req: Request) {
 
           try {
             // Immediately emit status so client shows activity in <100ms
-            enqueue(`[[STATUS:Searching the web for "${currentQuery.slice(0, 50)}…"]]\n`);
+            enqueue(`[[STATUS:Searching the web for "${cleanedQuery.slice(0, 50)}…"]]\n`);
 
-            // Fetch primary results first for max speed and zero rate-limiting contention
-            const primary = await searchLiveWeb(currentQuery, 5).catch(() => [] as WebSearchResult[]);
+            // Fetch primary results with cleaned query for max precision and speed
+            let primary = await searchLiveWeb(cleanedQuery, 5).catch(() => [] as WebSearchResult[]);
+
+            // Fallback to raw query if cleaned query returns < 3 results
+            if (primary.length < 3 && cleanedQuery !== currentQuery) {
+              const rawResults = await searchLiveWeb(currentQuery, 4).catch(() => [] as WebSearchResult[]);
+              primary = [...primary, ...rawResults];
+            }
+
             let secondary: WebSearchResult[] = [];
-
             if (primary.length < 3) {
-              let variation = `${currentQuery} overview specs`;
-              if (/\b(vs|versus|compared|difference|between)\b/i.test(currentQuery)) {
-                variation = `${currentQuery} comparison benchmark`;
-              } else if (/\b(error|bug|issue|failed|exception|fix)\b/i.test(currentQuery)) {
-                variation = `${currentQuery} solution fix`;
+              let variation = `${cleanedQuery} overview specs`;
+              if (/\b(vs|versus|compared|difference|between)\b/i.test(cleanedQuery)) {
+                variation = `${cleanedQuery} comparison benchmark`;
+              } else if (/\b(error|bug|issue|failed|exception|fix)\b/i.test(cleanedQuery)) {
+                variation = `${cleanedQuery} solution fix`;
               }
               secondary = await searchLiveWeb(variation, 4).catch(() => [] as WebSearchResult[]);
             }
@@ -134,8 +151,8 @@ export async function POST(req: Request) {
             triggerAutoIndex(webResults.map(r => r.url));
 
             // Emit sources header — client renders source cards immediately
-            const followUps = generateFollowUps(currentQuery, webResults);
-            const concepts = generateConcepts(currentQuery, webResults);
+            const followUps = generateFollowUps(cleanedQuery, webResults);
+            const concepts = generateConcepts(cleanedQuery, webResults);
             const sourcesPayload = JSON.stringify({
               sources: webResults.map(r => ({ url: r.url, title: r.title, snippet: r.snippet })),
               followUps,
