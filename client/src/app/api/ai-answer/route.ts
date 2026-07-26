@@ -85,8 +85,14 @@ export async function POST(req: Request) {
             // Immediately emit status so client shows activity in <100ms
             enqueue(`[[STATUS:Searching the web for "${currentQuery.slice(0, 50)}…"]]\n`);
 
-            // Kick off both searches simultaneously
-            const variation = `${currentQuery} guide tutorial`;
+            // Build smart query variation based on query intent
+            let variation = `${currentQuery} overview specs`;
+            if (/\b(vs|versus|compared|difference|between)\b/i.test(currentQuery)) {
+              variation = `${currentQuery} comparison benchmark overview`;
+            } else if (/\b(error|bug|issue|failed|exception|fix)\b/i.test(currentQuery)) {
+              variation = `${currentQuery} solution fix issue`;
+            }
+
             const [primary, secondary] = await Promise.all([
               searchLiveWeb(currentQuery, 4).catch(() => [] as WebSearchResult[]),
               searchLiveWeb(variation, 3).catch(() => [] as WebSearchResult[]),
@@ -119,19 +125,19 @@ export async function POST(req: Request) {
               .map((r, i) => `[${i + 1}] ${r.title}\nURL: ${r.url}\nExcerpt: ${r.snippet}`)
               .join('\n\n');
 
-            const systemPrompt = `You are Trace, a precise AI developer research assistant.
+            const systemPrompt = `You are Trace, a real-time autonomous RAG search engine for developers.
 
 USER QUERY: "${currentQuery}"
 
-WEB SOURCES (retrieved live):
-${numberedSources || 'No sources retrieved.'}
+LIVE WEB SEARCH CONTEXT (retrieved real-time from the internet):
+${numberedSources || 'No web sources retrieved.'}
 
-INSTRUCTIONS:
-- Answer the query directly and thoroughly using the sources above.
-- Cite sources inline using [1], [2], etc. immediately after each fact.
-- Use proper markdown: headers, bullet lists, and fenced code blocks with language tags.
-- Include working code examples where relevant.
-- Do NOT start with "Based on the sources" or similar filler phrases. Just answer.`;
+CRITICAL RAG GROUNDING & KNOWLEDGE RULES:
+1. Treat the LIVE WEB SEARCH CONTEXT above as your primary, up-to-date ground truth.
+2. IGNORE any pre-trained internal knowledge cutoff dates (e.g., September 2023). If the live web sources contain information about recent models, tools, frameworks, releases, or developments (from 2024, 2025, or 2026), present those facts directly to the user.
+3. NEVER reply with "I don't know", "My knowledge cutoff is...", or "I don't have information up to 2026". Synthesize whatever information is present in the web sources or analyze the user query directly using the provided web context.
+4. Inline Citations: Cite sources inline using [1], [2], etc., immediately after every claim derived from a source.
+5. Format your response in clean Markdown with headers, bullet points, and code blocks where applicable. Do NOT use intro filler such as "Based on the web sources...".`;
 
             const formattedMessages = messages.length > 0
               ? messages.map((m: any) => ({

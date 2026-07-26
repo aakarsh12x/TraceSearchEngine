@@ -49,56 +49,111 @@ export async function searchLiveWeb(query: string, maxResults = 5): Promise<WebS
       }
     }
 
-    // Default: Free zero-config DuckDuckGo HTML web search fetcher
-    const ddgUrl = `https://html.duckduckgo.com/html/?q=${encodeURIComponent(query)}`;
-    const response = await fetch(ddgUrl, {
+    // Default: Free zero-config DuckDuckGo HTML/Lite web search fetcher
+    let response = await fetch('https://html.duckduckgo.com/html/', {
+      method: 'POST',
       headers: {
         'User-Agent':
           'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
         'Accept-Language': 'en-US,en;q=0.9',
+        'Content-Type': 'application/x-www-form-urlencoded',
       },
+      body: new URLSearchParams({ q: query }).toString(),
     });
 
     if (!response.ok) {
-      console.warn(`DuckDuckGo search fetch returned status ${response.status}`);
-      return results;
+      // Fallback to GET request
+      const ddgUrl = `https://html.duckduckgo.com/html/?q=${encodeURIComponent(query)}`;
+      response = await fetch(ddgUrl, {
+        headers: {
+          'User-Agent':
+            'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+          'Accept-Language': 'en-US,en;q=0.9',
+        },
+      });
     }
 
-    const html = await response.text();
-    const $ = cheerio.load(html);
+    if (response.ok) {
+      const html = await response.text();
+      const $ = cheerio.load(html);
 
-    $('.result').each((_, element) => {
-      if (results.length >= maxResults) return false;
+      $('.result').each((_, element) => {
+        if (results.length >= maxResults) return false;
 
-      const titleEl = $(element).find('.result__title a');
-      const snippetEl = $(element).find('.result__snippet');
-      const rawUrl = titleEl.attr('href') || '';
+        const titleEl = $(element).find('.result__title a');
+        const snippetEl = $(element).find('.result__snippet');
+        const rawUrl = titleEl.attr('href') || '';
 
-      // Extract real URL if DuckDuckGo uses redirect URLs (/l/?uddg=...)
-      let cleanUrl = rawUrl;
-      if (rawUrl.includes('uddg=')) {
-        try {
-          const match = rawUrl.match(/uddg=([^&]+)/);
-          if (match && match[1]) {
-            cleanUrl = decodeURIComponent(match[1]);
+        let cleanUrl = rawUrl;
+        if (rawUrl.includes('uddg=')) {
+          try {
+            const match = rawUrl.match(/uddg=([^&]+)/);
+            if (match && match[1]) {
+              cleanUrl = decodeURIComponent(match[1]);
+            }
+          } catch {
+            cleanUrl = rawUrl;
           }
-        } catch {
-          cleanUrl = rawUrl;
         }
-      }
 
-      const title = titleEl.text().trim();
-      const snippet = snippetEl.text().trim();
+        const title = titleEl.text().trim();
+        const snippet = snippetEl.text().trim();
 
-      if (cleanUrl && title && !cleanUrl.startsWith('/')) {
-        results.push({
-          title,
-          url: cleanUrl,
-          snippet,
-          source: 'web',
+        if (cleanUrl && title && !cleanUrl.startsWith('/')) {
+          results.push({
+            title,
+            url: cleanUrl,
+            snippet,
+            source: 'web',
+          });
+        }
+      });
+    }
+
+    // Secondary fallback to Lite endpoint if HTML returned zero results
+    if (results.length === 0) {
+      const liteResp = await fetch('https://lite.duckduckgo.com/lite/', {
+        method: 'POST',
+        headers: {
+          'User-Agent':
+            'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+          'Content-Type': 'application/x-www-form-urlencoded',
+        },
+        body: new URLSearchParams({ q: query }).toString(),
+      });
+
+      if (liteResp.ok) {
+        const html = await liteResp.text();
+        const $ = cheerio.load(html);
+
+        $('tr').each((_, element) => {
+          if (results.length >= maxResults) return false;
+          const link = $(element).find('a.result-link');
+          const snippetTd = $(element).next().find('td.result-snippet');
+
+          const rawUrl = link.attr('href') || '';
+          const title = link.text().trim();
+          const snippet = snippetTd.text().trim();
+
+          let cleanUrl = rawUrl;
+          if (rawUrl.includes('uddg=')) {
+            try {
+              const match = rawUrl.match(/uddg=([^&]+)/);
+              if (match && match[1]) cleanUrl = decodeURIComponent(match[1]);
+            } catch {}
+          }
+
+          if (cleanUrl && title && !cleanUrl.startsWith('/')) {
+            results.push({
+              title,
+              url: cleanUrl,
+              snippet: snippet || title,
+              source: 'web',
+            });
+          }
         });
       }
-    });
+    }
   } catch (error) {
     console.error('Error performing live web search:', error);
   }
