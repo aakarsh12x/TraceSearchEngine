@@ -25,7 +25,7 @@ export async function searchLiveWeb(query: string, maxResults = 5): Promise<WebS
   const results: WebSearchResult[] = [];
 
   try {
-    // Tier 1: Tavily API (richest snippets)
+    // Tier 1: Tavily API (if TAVILY_API_KEY is set)
     const tavilyKey = process.env.TAVILY_API_KEY;
     if (tavilyKey) {
       try {
@@ -54,46 +54,90 @@ export async function searchLiveWeb(query: string, maxResults = 5): Promise<WebS
       } catch { /* fall through */ }
     }
 
-    // Tier 2: DuckDuckGo HTML POST
-    const ddgHeaders = {
-      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
-      'Accept-Language': 'en-US,en;q=0.9',
-      'Content-Type': 'application/x-www-form-urlencoded',
-    };
-
+    // Tier 2: Bing HTML scraping (Most reliable server-side provider with canonical URL decoding)
     try {
-      const ddgResp = await fetch('https://html.duckduckgo.com/html/', {
-        method: 'POST',
-        headers: ddgHeaders,
-        body: new URLSearchParams({ q: query }).toString(),
+      const bingUrl = `https://www.bing.com/search?q=${encodeURIComponent(query)}&count=${maxResults * 2}`;
+      const bingResp = await fetch(bingUrl, {
+        cache: 'no-store',
+        headers: {
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+          'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+          'Accept-Language': 'en-US,en;q=0.9',
+        },
       });
-      if (ddgResp.ok) {
-        const html = await ddgResp.text();
+      if (bingResp.ok) {
+        const html = await bingResp.text();
         const $ = cheerio.load(html);
-        $('.result').each((_, el) => {
+        $('li.b_algo').each((_, el) => {
           if (results.length >= maxResults) return false;
-          const titleEl = $(el).find('.result__title a');
-          const snippet = $(el).find('.result__snippet').text().trim();
-          const rawUrl = titleEl.attr('href') || '';
-          let url = rawUrl;
-          if (rawUrl.includes('uddg=')) {
-            const m = rawUrl.match(/uddg=([^&]+)/);
-            if (m?.[1]) url = decodeURIComponent(m[1]);
-          }
+          const titleEl = $(el).find('h2 a');
+          let url = titleEl.attr('href') || '';
           const title = titleEl.text().trim();
-          if (url && title && !url.startsWith('/') && url.startsWith('http')) {
-            results.push({ title, url, snippet, source: 'web' });
+          const snippet = $(el).find('.b_caption p, .b_algoSlug, .b_lineclamp2').first().text().trim();
+
+          // Decode Bing redirect wrapper URL (e.g. /ck/a?!&&p=...&u=a1aHR0cHM...)
+          if (url.includes('bing.com/ck/a')) {
+            try {
+              const uParam = new URL(url).searchParams.get('u');
+              if (uParam) {
+                const raw = uParam.startsWith('a1') ? uParam.slice(2) : uParam;
+                const decoded = Buffer.from(raw, 'base64url').toString('utf-8');
+                if (decoded.startsWith('http')) url = decoded;
+              }
+            } catch {}
+          }
+
+          if (url && title && url.startsWith('http') && !url.includes('bing.com/ck/a')) {
+            results.push({ title, url, snippet: snippet || title, source: 'web' });
           }
         });
       }
     } catch { /* fall through */ }
 
-    // Tier 3: DuckDuckGo Lite POST
-    if (results.length < 2) {
+    // Tier 3: DuckDuckGo GET HTML fallback
+    if (results.length < maxResults) {
+      try {
+        const ddgUrl = `https://html.duckduckgo.com/html/?q=${encodeURIComponent(query)}`;
+        const ddgResp = await fetch(ddgUrl, {
+          cache: 'no-store',
+          headers: {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+            'Accept-Language': 'en-US,en;q=0.9',
+          },
+        });
+        if (ddgResp.ok) {
+          const html = await ddgResp.text();
+          const $ = cheerio.load(html);
+          $('.result').each((_, el) => {
+            if (results.length >= maxResults) return false;
+            const titleEl = $(el).find('.result__title a');
+            const snippet = $(el).find('.result__snippet').text().trim();
+            const rawUrl = titleEl.attr('href') || '';
+            let url = rawUrl;
+            if (rawUrl.includes('uddg=')) {
+              const m = rawUrl.match(/uddg=([^&]+)/);
+              if (m?.[1]) url = decodeURIComponent(m[1]);
+            }
+            const title = titleEl.text().trim();
+            if (url && title && !url.startsWith('/') && url.startsWith('http') && !results.some(r => r.url === url)) {
+              results.push({ title, url, snippet: snippet || title, source: 'web' });
+            }
+          });
+        }
+      } catch { /* fall through */ }
+    }
+
+    // Tier 4: DuckDuckGo Lite fallback
+    if (results.length < maxResults) {
       try {
         const liteResp = await fetch('https://lite.duckduckgo.com/lite/', {
           method: 'POST',
-          headers: ddgHeaders,
+          cache: 'no-store',
+          headers: {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+            'Accept-Language': 'en-US,en;q=0.9',
+            'Content-Type': 'application/x-www-form-urlencoded',
+          },
           body: new URLSearchParams({ q: query }).toString(),
         });
         if (liteResp.ok) {
@@ -110,7 +154,7 @@ export async function searchLiveWeb(query: string, maxResults = 5): Promise<WebS
               if (m?.[1]) url = decodeURIComponent(m[1]);
             }
             const title = link.text().trim();
-            if (url && title && !url.startsWith('/') && url.startsWith('http')) {
+            if (url && title && !url.startsWith('/') && url.startsWith('http') && !results.some(r => r.url === url)) {
               results.push({ title, url, snippet: snippet || title, source: 'web' });
             }
           });
@@ -118,52 +162,11 @@ export async function searchLiveWeb(query: string, maxResults = 5): Promise<WebS
       } catch { /* fall through */ }
     }
 
-    // Tier 4: Bing HTML scraping — resolves real target URLs from Bing redirect wrappers
-    if (results.length < maxResults) {
-      try {
-        const bingUrl = `https://www.bing.com/search?q=${encodeURIComponent(query)}&count=${maxResults * 2}`;
-        const bingResp = await fetch(bingUrl, {
-          headers: {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
-            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-            'Accept-Language': 'en-US,en;q=0.9',
-          },
-        });
-        if (bingResp.ok) {
-          const html = await bingResp.text();
-          const $ = cheerio.load(html);
-          $('li.b_algo').each((_, el) => {
-            if (results.length >= maxResults) return false;
-            const titleEl = $(el).find('h2 a');
-            let url = titleEl.attr('href') || '';
-            const title = titleEl.text().trim();
-            const snippet = $(el).find('.b_caption p, .b_algoSlug').first().text().trim();
-
-            // Decode Bing redirect wrapper URL (e.g. /ck/a?!&&p=...&u=a1aHR0cHM...)
-            if (url.includes('bing.com/ck/a')) {
-              try {
-                const uParam = new URL(url).searchParams.get('u');
-                if (uParam) {
-                  const raw = uParam.startsWith('a1') ? uParam.slice(2) : uParam;
-                  const decoded = Buffer.from(raw, 'base64url').toString('utf-8');
-                  if (decoded.startsWith('http')) url = decoded;
-                }
-              } catch {}
-            }
-
-            if (url && title && url.startsWith('http') && !url.includes('bing.com/ck/a')) {
-              results.push({ title, url, snippet, source: 'web' });
-            }
-          });
-        }
-      } catch { /* fall through */ }
-    }
-
-    // Tier 5: Wikipedia Search API fallback for entity/model queries if web results are empty
+    // Tier 5: Wikipedia Search API fallback
     if (results.length === 0) {
       try {
         const wikiUrl = `https://en.wikipedia.org/w/api.php?action=query&list=search&srsearch=${encodeURIComponent(query)}&format=json&origin=*`;
-        const wikiResp = await fetch(wikiUrl);
+        const wikiResp = await fetch(wikiUrl, { cache: 'no-store' });
         if (wikiResp.ok) {
           const data = await wikiResp.json();
           const wikiItems = data.query?.search || [];

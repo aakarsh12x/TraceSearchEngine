@@ -109,20 +109,21 @@ export async function POST(req: Request) {
             // Immediately emit status so client shows activity in <100ms
             enqueue(`[[STATUS:Searching the web for "${currentQuery.slice(0, 50)}…"]]\n`);
 
-            // Build smart query variation based on query intent
-            let variation = `${currentQuery} overview specs`;
-            if (/\b(vs|versus|compared|difference|between)\b/i.test(currentQuery)) {
-              variation = `${currentQuery} comparison benchmark overview`;
-            } else if (/\b(error|bug|issue|failed|exception|fix)\b/i.test(currentQuery)) {
-              variation = `${currentQuery} solution fix issue`;
+            // Fetch primary results first for max speed and zero rate-limiting contention
+            const primary = await searchLiveWeb(currentQuery, 5).catch(() => [] as WebSearchResult[]);
+            let secondary: WebSearchResult[] = [];
+
+            if (primary.length < 3) {
+              let variation = `${currentQuery} overview specs`;
+              if (/\b(vs|versus|compared|difference|between)\b/i.test(currentQuery)) {
+                variation = `${currentQuery} comparison benchmark`;
+              } else if (/\b(error|bug|issue|failed|exception|fix)\b/i.test(currentQuery)) {
+                variation = `${currentQuery} solution fix`;
+              }
+              secondary = await searchLiveWeb(variation, 4).catch(() => [] as WebSearchResult[]);
             }
 
-            const [primary, secondary] = await Promise.all([
-              searchLiveWeb(currentQuery, 4).catch(() => [] as WebSearchResult[]),
-              searchLiveWeb(variation, 3).catch(() => [] as WebSearchResult[]),
-            ]);
-
-            // Deduplicate
+            // Deduplicate results by URL
             const seen = new Map<string, WebSearchResult>();
             [...primary, ...secondary].forEach(r => {
               if (r.url && !seen.has(r.url)) seen.set(r.url, r);
