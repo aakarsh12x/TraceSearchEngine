@@ -1,278 +1,232 @@
 # Trace
 
-> A high-performance, AI-augmented search engine built for developers.
+> High-performance, agentic search engine designed for software developers.
 
-Trace indexes technical documentation, Stack Overflow threads, GitHub repositories, and developer-focused content — surfacing results in under a millisecond with a neural inference layer that synthesizes answers from the top results in real time.
+Trace combines sub-millisecond local index retrieval with an autonomous live-web search agent. It indexes developer documentation, GitHub repositories, and technical resources—synthesizing streaming answers with inline citations, code blocks, interactive concept inspection, and automated follow-up suggestions.
 
-<img width="1918" height="909" alt="image" src="https://github.com/user-attachments/assets/74fdac2c-e3fc-48ec-bd76-fbe1db4bb2cf" />
-<img width="1919" height="906" alt="Results view" src="https://github.com/user-attachments/assets/db03ef5b-3af5-4960-8e89-cd5261ffca7a" />
-<img width="1910" height="909" alt="AI terminal" src="https://github.com/user-attachments/assets/a8da18bd-524c-4e90-8c22-955c0f340f78" />
+---
+
+## Capabilities
+
+- **Autonomous Web Search Mode**: Live parallel web discovery across multiple search variations, automated background indexing, and real-time streaming synthesis via LLaMA 3.1 70B.
+- **Direct Fast Search Mode**: Sub-millisecond candidate retrieval powered by FlexSearch in-memory index with multi-signal document scoring (exact phrase match, domain authority boost, term coverage, and title quality penalties).
+- **Sub-Second Indexing Pipeline**: Concurrent Puppeteer spider with network-layer resource filtering, SHA-256 deduplication, and Neon Postgres persistence.
+- **Interactive Concept Inspector**: Clickable code tags and technical term chips open a side drawer with live explanations and contextual reference material.
+- **Zero-Throttling Streaming Pipeline**: `requestAnimationFrame` debounced rendering, zero-buffer HTTP response chunking, and lazy syntax highlighting during active streaming to maintain 60 FPS performance without CPU throttling.
+- **Mobile-Responsive Layout**: Adaptive viewport positioning, virtual keyboard displacement compensation, and persistent top-bar navigation mode.
 
 ---
 
 ## Architecture
 
+### System Flow
+
 ```mermaid
 graph TD
-    Browser(["🌐 Browser"])
+    Browser["Client Browser (React 19 / Next.js)"]
 
-    Browser -->|"GET /api/search"| SearchProxy
-    Browser -->|"POST /api/ai-answer"| AIRoute
+    Browser -->|"GET /api/search?q="| SearchProxy["Search Proxy (/api/search/route.ts)"]
+    Browser -->|"POST /api/ai-answer"| AIRoute["AI Agent Route (/api/ai-answer/route.ts)"]
 
-    subgraph NextJS["Next.js Frontend · port 3000"]
-        SearchProxy["Search Proxy\n/api/search/route.ts\n127.0.0.1 — avoids IPv6 delay"]
-        AIRoute["AI Answer Route\n/api/ai-answer/route.ts\nVercel AI SDK · streamText()"]
+    subgraph NextJS["Next.js Application Layer"]
+        SearchProxy
+        AIRoute
     end
 
-    AIRoute -->|"LLaMA 3.1 70B"| NIM["NVIDIA NIM API\nLLaMA 3.1 70B Instruct"]
-    NIM -->|"stream tokens"| Browser
+    AIRoute -->|"Parallel Web Retrieval"| LiveWeb["DuckDuckGo / Web APIs"]
+    AIRoute -->|"LLaMA 3.1 70B Instruct"| NVIDIA["NVIDIA NIM API"]
+    
+    SearchProxy -->|"Loopback HTTP (127.0.0.1:3001)"| ExpressServer["Express Search Server"]
 
-    SearchProxy -->|"HTTP · loopback"| ExpressRoutes
-
-    subgraph Express["Express Backend · port 3001"]
-        ExpressRoutes{"HTTP Routes"}
-        ExpressRoutes -->|"GET /search"| Search["Search Handler\ncandidate retrieval + scoring"]
-        ExpressRoutes -->|"POST /crawler/start"| Crawler
-        ExpressRoutes -->|"POST /crawler/reddit"| RedditCrawler["Reddit Crawler\nsubreddit pipeline"]
-        ExpressRoutes -->|"POST /admin/resync"| Resync["Resync Handler\nreload index from Postgres"]
-
-        subgraph IndexManager["Index Manager"]
-            FlexSearch["FlexSearch\ntitle · description · source\nforward tokenized · in-RAM"]
-            ContentCache["Content Cache\nMap&lt;url, string&gt;\nfirst 1000 chars · zero I/O"]
-            Scorer["scoreDoc()\nphrase match · prefix · domain boost\nterm coverage · boilerplate penalty"]
-        end
-
-        subgraph CrawlPipeline["Crawl Pipeline"]
-            Crawler["Puppeteer + Cheerio\nconcurrency: 3 · delayRange jitter"]
-            URLFilter["URL Filter\ndenylist · depth enforcement"]
-            Dedup["Deduplication\nURL set + SHA-256 hash set\npre-warmed from Postgres"]
-        end
-
-        Search --> FlexSearch
-        FlexSearch --> ContentCache
-        ContentCache --> Scorer
-        Resync --> FlexSearch
-
-        Crawler --> URLFilter --> Dedup
+    subgraph Express["Express Index & Crawl Engine (Port 3001)"]
+        ExpressServer -->|"In-Memory Query"| IndexManager["FlexSearch In-Memory Index"]
+        ExpressServer -->|"Crawl Jobs"| CrawlEngine["Puppeteer Crawler"]
+        IndexManager -->|"Content Resolution"| ContentCache["RAM Content Cache (Map<string, string>)"]
+        IndexManager -->|"Multi-Signal Scoring"| Scorer["Scoring Engine (phrase, domain boost)"]
     end
 
-    subgraph Postgres["Neon Postgres · persistent store"]
-        PagesTable[("pages\nurl PK · title · description\ncontent · code_snippets\nsource · tags · content_hash\nlast_crawled")]
+    subgraph DB["Database Layer"]
+        Postgres[("Neon Postgres Serverless")]
     end
 
-    Dedup -->|"upsert ON CONFLICT"| PagesTable
-    Dedup -->|"live index on write"| FlexSearch
-    PagesTable -->|"syncIndex() on startup\nchunked 1000 rows"| FlexSearch
-    PagesTable -->|"fill content cache"| ContentCache
-
-    style NextJS fill:#f0eeff,stroke:#7c6fcd,color:#1a1a2e
-    style Express fill:#e6f7f2,stroke:#2d9c74,color:#0a2e1e
-    style IndexManager fill:#d4f0e8,stroke:#1d9e75,color:#04342c
-    style CrawlPipeline fill:#fdecea,stroke:#c0503a,color:#4A1B0C
-    style Postgres fill:#f1efe8,stroke:#888780,color:#2c2c2a
-    style NIM fill:#faeeda,stroke:#ba7517,color:#412402
+    CrawlEngine -->|"Upsert Page Records"| Postgres
+    CrawlEngine -->|"Live Index Injection"| IndexManager
+    Postgres -->|"Sync Index on Startup"| IndexManager
 ```
 
-The frontend never touches the database directly. All search traffic flows through the Express backend, which owns the in-memory index and the crawl pipeline exclusively. The AI answer route in Next.js is the sole consumer of the NVIDIA NIM API and streams its response directly to the browser via the Vercel AI SDK.
+### Agentic Search Execution Sequence
+
+```mermaid
+sequenceDiagram
+    autonumber
+    actor User as User Browser
+    participant API as Next.js API (/api/ai-answer)
+    participant Web as Live Web Search
+    participant LLM as NVIDIA NIM (LLaMA 3.1 70B)
+    participant Index as In-Memory Indexer
+
+    User->>API: POST /api/ai-answer (query, searchMode: "agentic")
+    API-->>User: Stream [[STATUS: Searching the web...]]
+    
+    par Parallel Discovery Search
+        API->>Web: Query Primary: "query"
+        API->>Web: Query Variation: "query guide tutorial"
+    end
+
+    Web-->>API: Return Top Web Results
+    
+    Note over API: Deduplicate URLs & Build Sources Payload
+    API-->>User: Stream [[SOURCES:{...}]] & [[STEP:synthesizing]]
+    
+    opt Non-blocking Auto Indexing
+        API->>Index: Queue discovered URLs for background crawl
+    end
+
+    API->>LLM: Send system prompt + numbered sources + conversation history
+    
+    loop Real-time Text Streaming
+        LLM-->>API: Token delta chunks
+        API-->>User: HTTP chunked stream
+        Note over User: rAF debounced rendering (60 FPS, 0% CPU throttle)
+    end
+```
 
 ---
 
-## Stack
+## Technology Stack
 
 | Layer | Technology |
 |---|---|
-| Frontend | Next.js 15, TypeScript, Framer Motion, Tailwind CSS |
-| Backend | Express, Node.js 20 |
-| Search | FlexSearch (in-memory inverted index) |
-| Crawler | Puppeteer, Cheerio |
-| Database | Neon Postgres (serverless) |
-| AI model | LLaMA 3.1 70B Instruct via NVIDIA NIM |
-| AI SDK | Vercel AI SDK (streaming) |
+| Frontend | Next.js 15, React 19, TypeScript, Framer Motion, Tailwind CSS |
+| Frontend Performance | `requestAnimationFrame` render debouncing, Prism syntax highlighting deferral |
+| Search Backend | Express.js, Node.js 20 |
+| Local Search Index | FlexSearch (in-memory document index), Custom Scoring Engine |
+| Crawler & Spider | Puppeteer, Cheerio, SHA-256 Hash Deduplication |
+| Database | Neon Postgres (Serverless PostgreSQL) |
+| AI Inference | LLaMA 3.1 70B Instruct via NVIDIA NIM API |
+| Streaming Protocol | Vercel AI SDK (`streamText`), HTTP Chunked Transfer Encoding (`force-dynamic`) |
 
 ---
 
-## Performance
+## Performance Metrics
 
-| Operation | Typical latency |
+| Operation | Latency |
 |---|---|
 | FlexSearch candidate retrieval | < 1 ms |
-| Content cache resolution (`Map.get`) | < 0.1 ms |
-| Multi-signal scoring (40 candidates) | 1–3 ms |
-| Full search pipeline end-to-end | 2–5 ms |
-| Next.js → Express round-trip | 8–20 ms |
-| Browser fetch → first result render | 20–40 ms |
-| AI first token appearance | 300–600 ms |
-
-The dominant cost in browser-perceived latency is the HTTP round-trip over loopback, not the search computation itself.
+| Memory content cache lookup (`Map.get`) | < 0.1 ms |
+| Multi-signal candidate scoring (40 candidates) | 1–3 ms |
+| Local search pipeline end-to-end | 2–5 ms |
+| Next.js proxy to Express loopback | 8–15 ms |
+| Agent web search discovery | 400–900 ms |
+| AI inference first-token latency | 250–500 ms |
+| Frontend streaming render rate | 60 FPS (debounced) |
 
 ---
 
-## System Components
+## Core Components
 
-### Crawl pipeline — `server/src/crawler.ts`
+### 1. Agentic AI Answer Route (`client/src/app/api/ai-answer/route.ts`)
 
-A concurrent, Puppeteer-driven spider handling the full lifecycle from URL discovery to database persistence.
+- **Dynamic Execution**: Exported as `export const dynamic = 'force-dynamic'` and `export const runtime = 'nodejs'` to prevent Next.js response buffering.
+- **Parallel Retrieval**: Executes primary and query-variation web searches simultaneously using `Promise.all` with fail-safe fallbacks.
+- **Immediate Header Emission**: Emits `[[STATUS:...]]` and `[[SOURCES:...]]` control tokens over the HTTP stream before triggering LLM generation, allowing the UI to render source cards immediately.
+- **Zero-Buffer Response**: Configured with `Cache-Control: no-store`, `X-Accel-Buffering: no`, and `Transfer-Encoding: chunked`.
 
-- **Deduplication** — pre-warms URL and SHA-256 content-hash sets from Postgres before each crawl; skips pages whose content hasn't changed.
-- **Resource filtering** — aborts images, fonts, stylesheets, media, and websocket requests at the network layer via Puppeteer's request interception, reducing per-page bandwidth by ~80%.
-- **Content extraction** — Cheerio parses `title`, `description`, `content` (all `<p>`, `<article>`, `<section>`, `<li>`, `<pre>`), `codeSnippets` (all `<code>` and `<pre>`, capped at 10 000 chars), `source`, and `tags`.
-- **Live indexing** — upon a successful Postgres write, the page is immediately pushed into the FlexSearch index and content cache, making it searchable without a server restart.
-- **Concurrency** — configurable `maxConcurrency` (default: 3) and randomized `delayRange` inter-request pauses. A FIFO queue of `{ url, depth }` tuples enforces strict depth limits.
-- **URL filtering** — a denylist strips auth pages, pagination, tag archives, sitemaps, and other low-signal routes before they enter the queue.
+### 2. Frontend Trajectory Renderer (`client/src/components/search/AgentTrajectory.tsx`)
 
-### Index manager — `server/src/index-manager.ts`
+- **Frame-Rate Debouncing**: Uses `requestAnimationFrame` to batch incoming stream tokens, preventing O(n²) markdown re-parsing bottlenecks on every character delta.
+- **Lazy Syntax Highlighting**: Bypasses heavy Prism.js syntax tokenization during active streaming to prevent CPU thread blocking, upgrading to full color highlighting upon completion.
+- **Inline Citation Mapping**: Automatically converts `[n]` bracketed citations in LLM output into clickable markdown links pointing directly to retrieved source URLs.
 
-The performance-critical core. Every search query resolves entirely in memory.
+### 3. Local Search Engine (`server/src/index-manager.ts`)
 
-- **FlexSearch Document index** — three indexed fields: `title` (forward tokenized), `description` (forward tokenized), `source` (strict tokenized). The `content` field is intentionally excluded to keep the RAM footprint minimal.
-- **Content cache** — a module-level `Map<string, string>` stores the first 1 000 characters of each page's body. Serves the relevance scorer and the result snippet with zero I/O.
-- **Index sync** — `syncIndex()` is called once on startup, loading the full `pages` table from Postgres in chunks of 1 000 rows. A resync takes 10–15 s for 50 000 pages and requires no further database reads for the lifetime of the process.
-- **Search pipeline** — five stages:
-  1. Candidate retrieval from FlexSearch (`enrich: true`, `suggest: true`, pool of 40).
-  2. Cross-field deduplication into a `Map<url, doc>`.
-  3. Content resolution from the in-memory cache (`Map.get` — no I/O).
-  4. Multi-signal scoring via `scoreDoc()`: exact phrase match, prefix position, per-term occurrence counts, query coverage ratios, domain authority boost (+50 for MDN, TypeScript, React, Node.js, Rust, Docker, Kubernetes, Tailwind, and others), and boilerplate title penalty.
-  5. Sort descending by score, return top 10.
+- **In-Memory Index**: Indexes `title`, `description`, and `source` using FlexSearch forward tokenization. Excludes heavy body text to maintain minimal memory footprint.
+- **Multi-Signal Scorer**: Evaluates exact phrase matches, term occurrence counts, query coverage ratios, title quality penalties, and domain authority boosts (+50 boost for MDN, TypeScript, React, Node.js, Rust, Docker, Kubernetes, etc.).
+- **Startup Sync**: `syncIndex()` loads all records from Neon Postgres on server boot in 1,000-row chunks.
 
-### Express backend — `server/src/index.ts`
+### 4. Web Crawler (`server/src/crawler.ts`)
 
-| Method | Path | Purpose |
+- **Network Interception**: Intercepts Puppeteer network requests to abort images, fonts, stylesheets, and media downloads, reducing bandwidth per page by ~80%.
+- **Deduplication**: Checks pre-warmed URL sets and SHA-256 content hashes before writing to database.
+- **Persistence**: Writes normalized page titles, descriptions, clean body text, and code snippets into Neon Postgres using `ON CONFLICT (url) DO UPDATE`.
+
+---
+
+## API Reference
+
+### Express Server (Port 3001)
+
+| Method | Endpoint | Description |
 |---|---|---|
-| `GET` | `/search?q=` | Execute a search query against the in-memory index |
-| `POST` | `/crawler/start` | Start a background Puppeteer crawl from a seed URL |
-| `POST` | `/crawler/reddit` | Start a Reddit-specific crawl across given subreddits |
-| `POST` | `/admin/resync` | Re-synchronize the FlexSearch index from Postgres |
+| `GET` | `/search?q=<query>` | Queries the in-memory FlexSearch index and returns top scored results |
+| `POST` | `/crawler/start` | Initiates a background web crawl starting from a seed URL |
+| `POST` | `/crawler/reddit` | Triggers a crawl across specified subreddits |
+| `POST` | `/admin/resync` | Re-synchronizes the in-memory FlexSearch index from Neon Postgres |
 
-`syncIndex()` is awaited before the process accepts any requests, guaranteeing a fully populated index on first query.
+### Next.js API Routes (Port 3000)
 
-### Next.js API routes — `src/app/api/`
-
-**Search proxy** (`/api/search/route.ts`) — relays the `q` parameter to `http://127.0.0.1:3001/search`. Uses `127.0.0.1` explicitly to avoid the Node.js IPv6 resolution delay (300–500 ms on Windows and some Linux configurations).
-
-**AI answer route** (`/api/ai-answer/route.ts`) — accepts the user's query and top four search results, builds a structured system prompt with title, description, URL, and code snippets from each result, and streams a synthesized answer from LLaMA 3.1 70B via the Vercel AI SDK's `streamText()`.
-
-### Frontend — `src/app/page.tsx`
-
-Built with Next.js 15, Framer Motion, and Tailwind CSS.
-
-- **Search-as-you-type** — 400 ms debounce fires a fetch to `/api/search`; results populate without pressing Enter.
-- **Layout morphing** — the search input and logo carry Framer Motion `layoutId` attributes and smoothly morph to the top navigation bar when results mode activates. Spring physics use a `[0.22, 1, 0.36, 1]` cubic bezier at 850 ms.
-- **AI terminal** — becomes visible as soon as the user starts typing. Before triggering: displays a keyboard hint. After Enter: streams markdown rendered by `react-markdown` through a pulsing "Synthesizing context…" state.
-
----
-
-## Data Store
-
-**Neon Postgres** — single `pages` table:
-
-| Column | Type | Notes |
+| Method | Endpoint | Description |
 |---|---|---|
-| `url` | `text` PK | Normalized, deduplicated |
-| `title` | `text` | From `<title>` or first heading |
-| `description` | `text` | From `<meta name="description">` |
-| `content` | `text` | Extracted body text |
-| `code_snippets` | `text` | All `<code>` and `<pre>` content |
-| `source` | `text` | Crawl batch label |
-| `tags` | `text` | Comma-separated keywords |
-| `content_hash` | `text` | SHA-256 of content for dedup |
-| `last_crawled` | `timestamptz` | Crawl timestamp |
-
-Upserts use `ON CONFLICT (url) DO UPDATE SET` to keep records fresh on recrawl.
+| `GET` | `/api/search?q=<query>` | Proxy route forwarding search requests to `127.0.0.1:3001/search` |
+| `POST` | `/api/ai-answer` | Streams agentic web research or direct search answers via AI SDK |
+| `GET` | `/api/status` | Returns database and index readiness status |
+| `POST` | `/api/explain-term` | Generates short technical concept explanations for the side drawer |
 
 ---
 
-## Local Development
+## Database Schema
 
-**Prerequisites** — Node.js 20+, a Neon Postgres database with the `pages` table created, an NVIDIA NIM API key.
+Database table definition in **Neon Postgres**:
 
-**Environment** — create a `.env` file in the project root:
+```sql
+CREATE TABLE IF NOT EXISTS pages (
+  url TEXT PRIMARY KEY,
+  title TEXT NOT NULL,
+  description TEXT,
+  content TEXT,
+  code_snippets TEXT,
+  source TEXT,
+  tags TEXT,
+  content_hash TEXT,
+  last_crawled TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+);
+```
+
+---
+
+## Local Development Setup
+
+### Prerequisites
+
+- Node.js 20+
+- Neon Postgres database instance
+- NVIDIA NIM API Key
+
+### Environment Configuration
+
+Create `.env` files in both root and `client/` directories:
 
 ```env
-DATABASE_URL=postgresql://...
-NVIDIA_KEY=nvapi-...
+DATABASE_URL=postgresql://user:password@ep-example.neon.tech/dbname?sslmode=require
+NVIDIA_KEY=nvapi-your-nvidia-nim-api-key
 ```
 
-**Start the backend:**
+### Running the Application
 
-```bash
-cd server
-npm install
-npm run dev
-```
+1. **Install Root Dependencies**:
+   ```bash
+   npm run install:all
+   ```
 
-The server starts on port 3001, syncs the full index from Postgres, and is ready to handle search queries.
+2. **Start Client and Server Concurrently**:
+   ```bash
+   npm run dev
+   ```
 
-**Start the frontend:**
+   - **Client**: `http://localhost:3000`
+   - **Express Server**: `http://localhost:3001`
 
-```bash
-cd src
-npm install
-npm run dev
-```
-
-The Next.js dev server starts on port 3000.
-
-**Run a crawl:**
-
-```bash
-curl -X POST http://localhost:3001/crawler/start \
-  -H "Content-Type: application/json" \
-  -d '{"seedUrl": "https://nextjs.org/docs"}'
-```
-
-Pages are indexed live and become searchable within seconds of being crawled.
-
-**Re-sync the index:**
-
-```bash
-curl -X POST http://localhost:3001/admin/resync
-```
-
----
-
-## Project Structure
-
-```
-SearchEngine/
-├── server/                        Express backend
-│   ├── src/
-│   │   ├── index.ts               Server entry point, HTTP routes
-│   │   ├── crawler.ts             Puppeteer crawl engine
-│   │   ├── index-manager.ts       FlexSearch index, content cache, relevance scorer
-│   │   ├── storage.ts             Neon Postgres query layer
-│   │   ├── db.ts                  Database connection pool
-│   │   └── reddit-crawler.ts      Reddit-specific crawl pipeline
-│   └── scripts/
-│       ├── mega-crawl.ts          Seeded multi-domain crawl runner
-│       ├── verify-index.ts        Index correctness diagnostics
-│       └── check-count.ts         Database row count utility
-└── src/                           Next.js frontend
-    ├── app/
-    │   ├── page.tsx               Main search UI
-    │   ├── globals.css            Theme, scrollbars, animations
-    │   └── api/
-    │       ├── search/route.ts    Search proxy to Express
-    │       └── ai-answer/route.ts NVIDIA NIM streaming endpoint
-    └── components/
-        └── ui/
-            ├── text-animate.tsx   Framer Motion character animation
-            ├── terminal.tsx       Styled terminal output component
-            ├── shimmer-button.tsx Animated submit button
-            └── meteors.tsx        Background particle effect
-```
-
----
-
-## Design Decisions
-
-**Why a separate Express backend?** Next.js API routes are stateless by design — unsuitable for hosting an in-memory search index. The Express backend is a persistent Node.js process that holds the FlexSearch index in RAM for the lifetime of the server.
-
-**Why FlexSearch over a vector database?** For developer documentation search, keyword and phrase relevance is more precise than cosine similarity over embeddings. A user searching for `useEffect cleanup` wants documents containing those exact tokens, not semantically adjacent results. FlexSearch delivers sub-millisecond full-text search with forward tokenization at negligible memory cost.
-
-**Why not index `content` in FlexSearch?** A forward-tokenized inverted index on the content field generates hundreds of index positions per document. At 10 000 documents with ~2 000 characters each, the content index alone would consume several hundred megabytes and slow each insertion. The scorer instead reads content from the in-memory cache — cheaper than indexed lookup for this use case.
-
-**Why SHA-256 for deduplication?** Content-addressed deduplication catches pages that changed their URL (redirects, canonicalization) but not their body, and guards against re-crawling mirror sites. The hash is computed server-side before any database write and checked against a pre-warmed in-memory set — zero round-trips.
-
----
-
-*Built by a developer, for developers.*
+3. **Build for Production**:
+   ```bash
+   npm run build
+   ```
