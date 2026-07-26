@@ -1,45 +1,30 @@
 import { NextResponse } from 'next/server';
+import { searchLiveWeb } from '@/lib/tools/agent-tools';
+
+export const dynamic = 'force-dynamic';
 
 export async function GET(request: Request) {
   const { searchParams } = new URL(request.url);
   const query = searchParams.get('q');
 
-  if (!query) {
+  if (!query || query.trim().length < 2) {
     return NextResponse.json({ results: [], total: 0 });
   }
 
   try {
-    const backendUrl = process.env.API_URL || 'http://127.0.0.1:3001';
-    const response = await fetch(`${backendUrl}/search?q=${encodeURIComponent(query)}`);
-    if (!response.ok) throw new Error('Backend search failed');
+    const webQuery = query.trim()
+      .replace(/^(?:can\s+you|please|could\s+you|help\s+me|would\s+you)?\s*(?:tell|talk|explain|show|give|find|search|lookup|get|fetch|describe|summarize|provide)\s+(?:me\s+)?(?:(?:about|on|for|with|regarding|to)\s+)?/i, '')
+      .replace(/^(?:what\s+is|what\s+are|who\s+is|where\s+is|how\s+does|how\s+do\s+i|how\s+to)\s+/i, '')
+      .trim() || query.trim();
+    const results = (await searchLiveWeb(webQuery, 10)).map((result) => ({
+      url: result.url,
+      title: result.title,
+      description: result.snippet,
+      snippet: result.snippet,
+      source: 'web' as const,
+    }));
 
-    const data = await response.json();
-    let results: any[] = data.results || [];
-
-    // Handle old FlexSearch layered format: [{field, result:[{id, doc}]}]
-    // The new index-manager returns a flat sorted array, but guard against the old format
-    if (results.length > 0 && results[0]?.field !== undefined) {
-      // Old format - flatten and deduplicate manually
-      const FIELD_SCORE: Record<string, number> = { title: 10, description: 5, content: 2, codeSnippets: 1 };
-      const scoreMap = new Map<string, { doc: any; score: number }>();
-      for (const layer of results) {
-        const weight = FIELD_SCORE[layer.field] ?? 1;
-        for (const hit of (layer.result || [])) {
-          const url = hit.id as string;
-          const existing = scoreMap.get(url);
-          if (existing) { existing.score += weight; }
-          else { scoreMap.set(url, { doc: hit.doc, score: weight }); }
-        }
-      }
-      results = Array.from(scoreMap.values())
-        .sort((a, b) => b.score - a.score)
-        .map(({ doc }) => doc);
-    }
-
-    // Filter out any entries without a URL
-    results = results.filter((r: any) => r?.url);
-
-    return NextResponse.json({ results, total: data.total ?? results.length });
+    return NextResponse.json({ results, total: results.length, source: 'web' });
   } catch (error) {
     console.error('Search error:', error);
     return NextResponse.json({ error: 'Search failed' }, { status: 500 });

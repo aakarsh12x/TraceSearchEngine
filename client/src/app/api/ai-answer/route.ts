@@ -1,6 +1,6 @@
 import { streamText } from 'ai';
 import { createOpenAI } from '@ai-sdk/openai';
-import { searchLiveWeb, triggerAutoIndex, WebSearchResult } from '@/lib/tools/agent-tools';
+import { fetchPageContent, searchLiveWeb, triggerAutoIndex, WebSearchResult } from '@/lib/tools/agent-tools';
 
 // Force this route to always be dynamic (never cached) and stream immediately
 export const dynamic = 'force-dynamic';
@@ -9,10 +9,23 @@ export const runtime = 'nodejs';
 function cleanSearchQuery(rawQuery: string): string {
   let q = rawQuery.trim();
   // Strip conversational prefixes and typo request phrasing (tell/rell/cell/talk/explain/show/give/find/search)
-  q = q.replace(/^(?:can\s+you|please|could\s+you|i\s+want\s+to|i\s+need\s+to|help\s+me|kindly|would\s+you)?\s*(?:tell|rell|cell|talk|explain|show|give|find|search|lookup|get|fetch|describe|detail|summarize|provide)\s+(?:me\s+)?(?:about|on|for|with|regarding|to|an?\s+overview\s+of|details?\s+on|information\s+on)?\s+/i, '');
+  q = q.replace(/^(?:can\s+you|please|could\s+you|i\s+want\s+to|i\s+need\s+to|help\s+me|kindly|would\s+you)?\s*(?:tell|rell|cell|talk|explain|show|give|find|search|lookup|get|fetch|describe|detail|summarize|provide)\s+(?:me\s+)?(?:(?:about|on|for|with|regarding|to|an?\s+overview\s+of|details?\s+on|information\s+on)\s+)?/i, '');
   // Strip "what is", "who is", "where is", "how do i", "how to"
   q = q.replace(/^(?:what\s+is|what\s+are|who\s+is|where\s+is|how\s+does|how\s+do\s+i|how\s+to|can\s+you\s+explain|give\s+me|overview\s+of|details\s+on)\s+/i, '');
   return q.trim() || rawQuery.trim();
+}
+
+function normalizeProvidedResults(rawResults: unknown): WebSearchResult[] {
+  if (!Array.isArray(rawResults)) return [];
+
+  return rawResults
+    .filter((result: any) => typeof result?.url === 'string' && result.url.startsWith('http'))
+    .map((result: any) => ({
+      title: result.title || result.url,
+      url: result.url,
+      snippet: result.snippet || result.description || result.content || '',
+      source: result.source === 'local' ? 'local' as const : 'web' as const,
+    }));
 }
 
 function generateFollowUps(query: string, results: WebSearchResult[]): string[] {
@@ -98,6 +111,7 @@ export async function POST(req: Request) {
 
     const currentQuery = prompt || messages[messages.length - 1]?.content || '';
     const cleanedQuery = cleanSearchQuery(currentQuery);
+    const providedResults = normalizeProvidedResults(results);
 
     const apiKey = process.env.NVIDIA_KEY;
     if (!apiKey) return new Response('NVIDIA_KEY environment variable is not set', { status: 500 });
@@ -120,11 +134,18 @@ export async function POST(req: Request) {
             // Immediately emit status so client shows activity in <100ms
             enqueue(`[[STATUS:Searching the web for "${cleanedQuery.slice(0, 50)}…"]]\n`);
 
-            // Fetch primary results with cleaned query for max precision and speed
-            let primary = await searchLiveWeb(cleanedQuery, 5).catch(() => [] as WebSearchResult[]);
+            // AI mode is web-only: combine the client search with fresh retrieval, then
+            // broaden once when the first provider returns too few useful sources.
+            const liveResults = await searchLiveWeb(cleanedQuery, 8).catch(() => [] as WebSearchResult[]);
+            let backupResults: WebSearchResult[] = [];
+            if (liveResults.length < 5) {
+              backupResults = await searchLiveWeb(`${cleanedQuery} documentation guide`, 6)
+                .catch(() => [] as WebSearchResult[]);
+            }
+            let primary = [...providedResults.slice(0, 8), ...liveResults, ...backupResults];
 
-            // Fallback to raw query if cleaned query returns < 3 results
-            if (primary.length < 3 && cleanedQuery !== currentQuery) {
+            // Fallback to the raw wording if the cleaned query is too narrow.
+            if (primary.length < 4 && cleanedQuery !== currentQuery) {
               const rawResults = await searchLiveWeb(currentQuery, 4).catch(() => [] as WebSearchResult[]);
               primary = [...primary, ...rawResults];
             }
@@ -145,7 +166,7 @@ export async function POST(req: Request) {
             [...primary, ...secondary].forEach(r => {
               if (r.url && !seen.has(r.url)) seen.set(r.url, r);
             });
-            const webResults = Array.from(seen.values()).slice(0, 6);
+            const webResults = Array.from(seen.values()).slice(0, 8);
 
             // Background indexing
             triggerAutoIndex(webResults.map(r => r.url));
@@ -162,9 +183,22 @@ export async function POST(req: Request) {
             enqueue(`[[SOURCES:${sourcesPayload}]]\n`);
             enqueue(`[[STEP:synthesizing]]\n\n`);
 
-            // Step 5: Build numbered context for the LLM
+            // Step 5: Fetch the most relevant pages so the model gets evidence, not only SERP text.
+            const pageContext = await Promise.all(
+              webResults.slice(0, 3).map(async (result) => {
+                const page = await fetchPageContent(result.url);
+                return { url: result.url, content: page.content.slice(0, 1800) };
+              })
+            );
+            const pageContextByUrl = new Map(pageContext.map((page) => [page.url, page.content]));
             const numberedSources = webResults
-              .map((r, i) => `[${i + 1}] ${r.title}\nURL: ${r.url}\nExcerpt: ${r.snippet}`)
+              .map((r, i) => {
+                const pageText = pageContextByUrl.get(r.url);
+                const evidence = pageText && !pageText.startsWith('Could not reach') && !pageText.startsWith('Failed to fetch')
+                  ? pageText
+                  : r.snippet;
+                return `[${i + 1}] ${r.title}\nURL: ${r.url}\nEvidence: ${evidence}`;
+              })
               .join('\n\n');
 
             const systemPrompt = `You are Trace, a real-time autonomous RAG search engine for developers.
@@ -179,7 +213,10 @@ CRITICAL RAG GROUNDING & KNOWLEDGE RULES:
 2. IGNORE any pre-trained internal knowledge cutoff dates (e.g., September 2023). If the live web sources contain information about recent models, tools, frameworks, releases, or developments (from 2024, 2025, or 2026), present those facts directly to the user.
 3. NEVER reply with "I don't know", "My knowledge cutoff is...", or "I don't have information up to 2026". Synthesize whatever information is present in the web sources or analyze the user query directly using the provided web context.
 4. Inline Citations: Cite sources inline using [1], [2], etc., immediately after every claim derived from a source.
-5. Format your response in clean Markdown with headers, bullet points, and code blocks where applicable. Do NOT use intro filler such as "Based on the web sources...".`;
+5. Format your response in clean Markdown with headers, bullet points, and code blocks where applicable. Do NOT use intro filler such as "Based on the web sources...".
+6. If no sources were retrieved, answer from your general knowledge but say that live retrieval was unavailable and do not invent citations.
+7. Prefer primary documentation over tutorial pages when both are available.
+8. For code examples, verify the implementation yourself. Event listeners must remove the exact same function reference they add, and fetch examples should use AbortController when cancellation matters.`;
 
             const formattedMessages = messages.length > 0
               ? messages.map((m: any) => ({
@@ -193,7 +230,8 @@ CRITICAL RAG GROUNDING & KNOWLEDGE RULES:
               model: nvidiaClient.chat('meta/llama-3.1-70b-instruct'),
               system: systemPrompt,
               messages: formattedMessages,
-              maxOutputTokens: 1500,
+              maxOutputTokens: 1200,
+              abortSignal: req.signal,
             });
 
             const reader = aiResult.textStream.getReader();
@@ -229,8 +267,8 @@ CRITICAL RAG GROUNDING & KNOWLEDGE RULES:
 Lead with the direct fact, command, or yes/no answer. Zero filler text.
 Max 200 tokens.
 
-LOCAL CONTEXT:
-${context || 'No local index matches.'}`;
+WEB SEARCH CONTEXT:
+${context || 'No web sources were retrieved.'}`;
 
       const formattedMessages = messages.length > 0
         ? messages.map((m: any) => ({
@@ -244,6 +282,7 @@ ${context || 'No local index matches.'}`;
         system: systemPrompt,
         messages: formattedMessages,
         maxOutputTokens: 200,
+        abortSignal: req.signal,
       });
 
       return aiResult.toTextStreamResponse();

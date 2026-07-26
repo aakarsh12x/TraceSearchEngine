@@ -291,7 +291,7 @@ export default function Home() {
   const keepSearchFocusRef = useRef(true);
 
   // ── Index readiness polling ───────────────────────────────────────────────
-  const [showReadyBanner, setShowReadyBanner] = useState(true);
+  const [showReadyBanner, setShowReadyBanner] = useState(false);
   const pollingStoppedRef = useRef(false);
 
   useEffect(() => {
@@ -337,8 +337,10 @@ export default function Home() {
   const { completion, complete, isLoading: isAILoading, setCompletion, stop } = useCompletion({
     api: '/api/ai-answer',
     streamProtocol: 'text',
-    onFinish: (_prompt, completionText) => {
-      if (completionText) {
+    onFinish: (prompt, completionText) => {
+      // An aborted stream may still report completion on the next tick. Ignore it
+      // unless it still belongs to the query currently owned by the UI.
+      if (prompt === lastSubmittedQueryRef.current && completionText) {
         setChatHistory(prev => [...prev, { role: 'assistant', content: completionText }]);
       }
     },
@@ -411,7 +413,7 @@ export default function Home() {
   useEffect(() => {
     const trimmed = query.trim();
 
-    if (lastSubmittedQueryRef.current && trimmed !== lastSubmittedQueryRef.current && !isResultsMode) {
+    if (lastSubmittedQueryRef.current && trimmed !== lastSubmittedQueryRef.current) {
       stop();
       setCompletion('');
       setIsAITriggered(false);
@@ -474,16 +476,17 @@ export default function Home() {
     const nextHistory = [...chatHistory, { role: 'user' as const, content: target }];
     setChatHistory(nextHistory);
 
+    setResults([]);
+    const cur = await runSearch(target);
+
+    if (lastSubmittedQueryRef.current !== target) return;
+
     if (searchMode === 'agentic') {
-      // AGENTIC MODE: Autonomous Live Web Search ONLY (Zero local db search)
-      setResults([]);
-      complete(target, { body: { searchMode: 'agentic', messages: nextHistory } });
+      // AI mode gets the same retrieved sources shown by the search pipeline.
+      complete(target, { body: { results: cur.slice(0, 8), searchMode: 'agentic', messages: nextHistory } });
     } else {
-      // DIRECT MODE: Fast local index search + crisp 250-token AI summary
-      const cur = await runSearch(target);
-      if (lastSubmittedQueryRef.current === target) {
-        complete(target, { body: { results: cur.slice(0, 4), searchMode: 'direct', messages: nextHistory } });
-      }
+      // Direct mode uses the same results for a short local/web-grounded answer.
+      complete(target, { body: { results: cur.slice(0, 4), searchMode: 'direct', messages: nextHistory } });
     }
   }, [chatHistory, complete, query, runSearch, searchMode, setCompletion, stop]);
 
@@ -790,10 +793,10 @@ export default function Home() {
                   >
                     <div className="flex items-center justify-between mb-4">
                       <span className="text-[11px] font-mono text-zinc-600 uppercase tracking-wider">
-                        Local Index
+                        Web Search
                       </span>
                       <span className="text-[11px] font-mono text-zinc-700">
-                        Direct Search
+                        Web Summary
                       </span>
                     </div>
                     <AgentTrajectory
@@ -833,7 +836,7 @@ export default function Home() {
                   {/* Header row */}
                   <div className="flex items-center justify-between mb-6 pl-1">
                     <h3 className="text-zinc-500 text-xs font-semibold tracking-wider uppercase border-l-2 border-teal-500/40 pl-2">
-                      Local Index Results
+                      Web Search Results
                     </h3>
                     <span className="text-zinc-600 text-xs font-mono">
                       {(page - 1) * PAGE_SIZE + 1}–{Math.min(page * PAGE_SIZE, results.length)} of {results.length}

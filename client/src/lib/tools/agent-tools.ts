@@ -14,6 +14,16 @@ export interface PageContentResult {
   codeSnippets: string[];
 }
 
+async function fetchWithTimeout(input: RequestInfo | URL, init: RequestInit = {}, timeoutMs = 7000) {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await fetch(input, { ...init, signal: controller.signal });
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
 /**
  * Searches the live web using a 4-tier fallback chain:
  * 1. Tavily API (if TAVILY_API_KEY is set)
@@ -23,18 +33,20 @@ export interface PageContentResult {
  */
 export async function searchLiveWeb(query: string, maxResults = 5): Promise<WebSearchResult[]> {
   const results: WebSearchResult[] = [];
+  const normalizedQuery = query.trim();
+  if (!normalizedQuery) return results;
 
   try {
     // Tier 1: Tavily API (if TAVILY_API_KEY is set)
     const tavilyKey = process.env.TAVILY_API_KEY;
     if (tavilyKey) {
       try {
-        const resp = await fetch('https://api.tavily.com/search', {
+        const resp = await fetchWithTimeout('https://api.tavily.com/search', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             api_key: tavilyKey,
-            query,
+            query: normalizedQuery,
             search_depth: 'basic',
             include_answer: false,
             max_results: maxResults,
@@ -56,8 +68,8 @@ export async function searchLiveWeb(query: string, maxResults = 5): Promise<WebS
 
     // Tier 2: Bing HTML scraping (Most reliable server-side provider with canonical URL decoding)
     try {
-      const bingUrl = `https://www.bing.com/search?q=${encodeURIComponent(query)}&count=${maxResults * 2}`;
-      const bingResp = await fetch(bingUrl, {
+      const bingUrl = `https://www.bing.com/search?q=${encodeURIComponent(normalizedQuery)}&count=${maxResults * 2}`;
+      const bingResp = await fetchWithTimeout(bingUrl, {
         cache: 'no-store',
         headers: {
           'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
@@ -94,11 +106,13 @@ export async function searchLiveWeb(query: string, maxResults = 5): Promise<WebS
       }
     } catch { /* fall through */ }
 
-    // Tier 3: DuckDuckGo GET HTML fallback
-    if (results.length < maxResults) {
+    // Tier 3: DuckDuckGo GET HTML provider. Keep it alongside Bing because
+    // technical and post-cutoff queries often rank better there.
+    const ddgResults: WebSearchResult[] = [];
+    {
       try {
-        const ddgUrl = `https://html.duckduckgo.com/html/?q=${encodeURIComponent(query)}`;
-        const ddgResp = await fetch(ddgUrl, {
+        const ddgUrl = `https://html.duckduckgo.com/html/?q=${encodeURIComponent(normalizedQuery)}`;
+        const ddgResp = await fetchWithTimeout(ddgUrl, {
           cache: 'no-store',
           headers: {
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
@@ -109,20 +123,21 @@ export async function searchLiveWeb(query: string, maxResults = 5): Promise<WebS
           const html = await ddgResp.text();
           const $ = cheerio.load(html);
           $('.result').each((_, el) => {
-            if (results.length >= maxResults) return false;
+            if (ddgResults.length >= maxResults) return false;
             const titleEl = $(el).find('.result__title a');
             const snippet = $(el).find('.result__snippet').text().trim();
             const rawUrl = titleEl.attr('href') || '';
-            let url = rawUrl;
+            let url = rawUrl.startsWith('//') ? `https:${rawUrl}` : rawUrl;
             if (rawUrl.includes('uddg=')) {
               const m = rawUrl.match(/uddg=([^&]+)/);
               if (m?.[1]) url = decodeURIComponent(m[1]);
             }
             const title = titleEl.text().trim();
-            if (url && title && !url.startsWith('/') && url.startsWith('http') && !results.some(r => r.url === url)) {
-              results.push({ title, url, snippet: snippet || title, source: 'web' });
+            if (url && title && url.startsWith('http') && !results.some(r => r.url === url) && !ddgResults.some(r => r.url === url)) {
+              ddgResults.push({ title, url, snippet: snippet || title, source: 'web' });
             }
           });
+          results.push(...ddgResults);
         }
       } catch { /* fall through */ }
     }
@@ -130,7 +145,7 @@ export async function searchLiveWeb(query: string, maxResults = 5): Promise<WebS
     // Tier 4: DuckDuckGo Lite fallback
     if (results.length < maxResults) {
       try {
-        const liteResp = await fetch('https://lite.duckduckgo.com/lite/', {
+        const liteResp = await fetchWithTimeout('https://lite.duckduckgo.com/lite/', {
           method: 'POST',
           cache: 'no-store',
           headers: {
@@ -138,7 +153,7 @@ export async function searchLiveWeb(query: string, maxResults = 5): Promise<WebS
             'Accept-Language': 'en-US,en;q=0.9',
             'Content-Type': 'application/x-www-form-urlencoded',
           },
-          body: new URLSearchParams({ q: query }).toString(),
+          body: new URLSearchParams({ q: normalizedQuery }).toString(),
         });
         if (liteResp.ok) {
           const html = await liteResp.text();
@@ -165,8 +180,8 @@ export async function searchLiveWeb(query: string, maxResults = 5): Promise<WebS
     // Tier 5: Wikipedia Search API fallback
     if (results.length === 0) {
       try {
-        const wikiUrl = `https://en.wikipedia.org/w/api.php?action=query&list=search&srsearch=${encodeURIComponent(query)}&format=json&origin=*`;
-        const wikiResp = await fetch(wikiUrl, { cache: 'no-store' });
+        const wikiUrl = `https://en.wikipedia.org/w/api.php?action=query&list=search&srsearch=${encodeURIComponent(normalizedQuery)}&format=json&origin=*`;
+        const wikiResp = await fetchWithTimeout(wikiUrl, { cache: 'no-store' });
         if (wikiResp.ok) {
           const data = await wikiResp.json();
           const wikiItems = data.query?.search || [];
@@ -183,11 +198,59 @@ export async function searchLiveWeb(query: string, maxResults = 5): Promise<WebS
       } catch {}
     }
 
+    // Last-resort structured fallback for environments that block HTML search pages.
+    if (results.length === 0) {
+      try {
+        const instantUrl = `https://api.duckduckgo.com/?q=${encodeURIComponent(normalizedQuery)}&format=json&no_html=1&skip_disambig=1`;
+        const instantResp = await fetchWithTimeout(instantUrl, { cache: 'no-store' });
+        if (instantResp.ok) {
+          const data = await instantResp.json();
+          const related = Array.isArray(data.RelatedTopics) ? data.RelatedTopics : [];
+          if (data.AbstractURL && data.AbstractText) {
+            results.push({
+              title: data.Heading || normalizedQuery,
+              url: data.AbstractURL,
+              snippet: data.AbstractText,
+              source: 'web',
+            });
+          }
+          for (const item of related) {
+            if (results.length >= maxResults) break;
+            if (item?.FirstURL && item?.Text) {
+              results.push({
+                title: item.Text.split(' - ')[0].trim() || item.Text,
+                url: item.FirstURL,
+                snippet: item.Text,
+                source: 'web',
+              });
+            }
+          }
+        }
+      } catch {}
+    }
+
   } catch (error) {
     console.error('Live web search error:', error);
   }
 
-  return results;
+  const terms = normalizedQuery.toLowerCase().split(/\s+/).filter((term) => term.length > 2);
+  const preferredDomains = [
+    'react.dev', 'nextjs.org', 'nodejs.org', 'developer.mozilla.org',
+    'typescriptlang.org', 'docs.python.org', 'docs.docker.com', 'github.com',
+  ];
+  const unique = Array.from(new Map(results.filter((result) => result.url).map((result) => [result.url, result])).values());
+  unique.sort((a, b) => {
+    const score = (result: WebSearchResult) => {
+      const haystack = `${result.title} ${result.snippet} ${result.url}`.toLowerCase();
+      let value = terms.reduce((total, term) => total + (haystack.includes(term) ? 4 : 0), 0);
+      if (result.title.toLowerCase().includes(normalizedQuery.toLowerCase())) value += 20;
+      if (preferredDomains.some((domain) => result.url.includes(domain))) value += 8;
+      return value;
+    };
+    return score(b) - score(a);
+  });
+
+  return unique.slice(0, maxResults);
 }
 
 /**
