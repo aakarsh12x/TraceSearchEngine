@@ -332,7 +332,7 @@ export default function Home() {
     };
   }, []);
 
-  const isResultsMode = isAITriggered || hasSearched || query.trim().length >= 2;
+  const isResultsMode = isAITriggered || hasSearched;
 
   const { completion, complete, isLoading: isAILoading, setCompletion, stop } = useCompletion({
     api: '/api/ai-answer',
@@ -344,21 +344,25 @@ export default function Home() {
     },
   });
 
-  const handleModeChange = useCallback((newMode: SearchMode) => {
-    if (newMode === searchMode) return;
+  const resetToHome = useCallback(() => {
     stop();
-    setCompletion('');
-    setIsAITriggered(false);
-    setSearchMode(newMode);
     setQuery('');
     setResults([]);
     setIsLoadingResults(false);
     setHasSearched(false);
+    setIsAITriggered(false);
+    setCompletion('');
     setChatHistory([]);
     setInspectedConcept(null);
     lastSubmittedQueryRef.current = '';
     searchAbortRef.current?.abort();
-  }, [searchMode, setCompletion, stop]);
+  }, [setCompletion, stop]);
+
+  const handleModeChange = useCallback((newMode: SearchMode) => {
+    if (newMode === searchMode) return;
+    resetToHome();
+    setSearchMode(newMode);
+  }, [searchMode, resetToHome]);
 
   const runSearch = useCallback(async (term: string) => {
     const trimmed = term.trim();
@@ -407,7 +411,7 @@ export default function Home() {
   useEffect(() => {
     const trimmed = query.trim();
 
-    if (lastSubmittedQueryRef.current && trimmed !== lastSubmittedQueryRef.current) {
+    if (lastSubmittedQueryRef.current && trimmed !== lastSubmittedQueryRef.current && !isResultsMode) {
       stop();
       setCompletion('');
       setIsAITriggered(false);
@@ -417,13 +421,13 @@ export default function Home() {
     if (trimmed.length === 0) {
       searchAbortRef.current?.abort();
       setIsLoadingResults(false);
-      setResults([]);
-      setHasSearched(false);
-      setPage(1);
-      stop();
-      setIsAITriggered(false);
-      setCompletion('');
-      lastSubmittedQueryRef.current = '';
+      if (!isResultsMode) {
+        setResults([]);
+        setPage(1);
+        stop();
+        setCompletion('');
+        lastSubmittedQueryRef.current = '';
+      }
       return;
     }
 
@@ -606,11 +610,11 @@ export default function Home() {
               initial={{ opacity: 0, x: -16 }}
               animate={{ opacity: 1, x: 0 }}
               transition={{ duration: 0.28, ease: EASE, delay: 0.04 }}
-              className="hidden sm:block shrink-0"
+              className="shrink-0"
             >
               <span
-                className="text-xl font-semibold select-none cursor-pointer"
-                onClick={() => setQuery('')}
+                className="text-lg sm:text-xl font-semibold select-none cursor-pointer"
+                onClick={resetToHome}
                 style={{ fontFamily: "'Audiowide', cursive", color: '#f8fafc', letterSpacing: '0' }}
               >
                 Trace
@@ -647,7 +651,7 @@ export default function Home() {
       <div
         className="relative z-10 flex flex-col items-center px-4 w-full min-h-screen justify-start"
         style={{
-          paddingTop: isResultsMode ? '5rem' : 'calc(50vh - 210px)',
+          paddingTop: isResultsMode ? '5rem' : 'clamp(2rem, 15vh, 7rem)',
         }}
       >
 
@@ -657,7 +661,10 @@ export default function Home() {
             <motion.div
               key="hero"
               initial={{ opacity: 0, y: 20 }}
-              animate={{ opacity: 1, y: 0 }}
+              animate={{
+                opacity: 1,
+                y: isFocused ? -36 : 0,
+              }}
               exit={{
                 opacity: 0,
                 y: -22,

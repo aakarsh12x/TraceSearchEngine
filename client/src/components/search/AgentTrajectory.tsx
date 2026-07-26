@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useRef, useEffect, useMemo } from 'react';
+import React, { useState, useRef, useEffect, useMemo } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import ReactMarkdown from 'react-markdown';
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
@@ -91,7 +91,7 @@ function getDomain(url: string): string {
 }
 
 // ── ChatGPT / Claude style Colorized Code Box Component ──────────────────────────
-export function CodeBlock({ node, inline, className, children, onInspectConcept, ...props }: any) {
+export const CodeBlock = React.memo(function CodeBlock({ node, inline, className, children, onInspectConcept, isAILoading, ...props }: any) {
   const [copied, setCopied] = useState(false);
   const match = /language-(\w+)/.exec(className || '');
   const language = match ? match[1] : '';
@@ -141,31 +141,37 @@ export function CodeBlock({ node, inline, className, children, onInspectConcept,
         </button>
       </div>
 
-      {/* Code body with full Prism color syntax highlighting */}
+      {/* Code body — uses ultra-fast plain pre/code while streaming, upgrades to Prism syntax highlighting on finish */}
       <div className="overflow-x-auto bg-zinc-950">
-        <SyntaxHighlighter
-          language={language || 'text'}
-          style={oneDark}
-          customStyle={{
-            margin: 0,
-            padding: '1rem',
-            backgroundColor: 'transparent',
-            fontSize: '0.75rem',
-            lineHeight: '1.6',
-            fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace',
-          }}
-          codeTagProps={{
-            style: {
-              fontFamily: 'inherit',
-            },
-          }}
-        >
-          {codeString}
-        </SyntaxHighlighter>
+        {isAILoading ? (
+          <pre className="p-4 m-0 text-xs font-mono text-zinc-200 leading-relaxed overflow-x-auto whitespace-pre">
+            <code>{codeString}</code>
+          </pre>
+        ) : (
+          <SyntaxHighlighter
+            language={language || 'text'}
+            style={oneDark}
+            customStyle={{
+              margin: 0,
+              padding: '1rem',
+              backgroundColor: 'transparent',
+              fontSize: '0.75rem',
+              lineHeight: '1.6',
+              fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace',
+            }}
+            codeTagProps={{
+              style: {
+                fontFamily: 'inherit',
+              },
+            }}
+          >
+            {codeString}
+          </SyntaxHighlighter>
+        )}
       </div>
     </div>
   );
-}
+});
 
 export function AgentTrajectory({
   completion, isAILoading, searchMode, onSelectFollowUp, onInspectConcept
@@ -361,7 +367,7 @@ export function AgentTrajectory({
           >
             <ReactMarkdown
               components={{
-                code: (props) => <CodeBlock {...props} onInspectConcept={onInspectConcept} />,
+                code: (props) => <CodeBlock {...props} isAILoading={isAILoading} onInspectConcept={onInspectConcept} />,
                 a: ({ href, children }) => (
                   <a
                     href={href}
