@@ -36,6 +36,12 @@ export async function searchLiveWeb(query: string, maxResults = 5): Promise<WebS
   const normalizedQuery = query.trim();
   if (!normalizedQuery) return results;
 
+  const firefoxHeaders = {
+    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:125.0) Gecko/20100101 Firefox/125.0',
+    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+    'Accept-Language': 'en-US,en;q=0.9',
+  };
+
   try {
     // Tier 1: Tavily API (if TAVILY_API_KEY is set)
     const tavilyKey = process.env.TAVILY_API_KEY;
@@ -66,110 +72,103 @@ export async function searchLiveWeb(query: string, maxResults = 5): Promise<WebS
       } catch { /* fall through */ }
     }
 
-    // Tier 2: Bing HTML scraping (Most reliable server-side provider with canonical URL decoding)
+    // Tier 2: DuckDuckGo HTML GET provider (Most reliable keyless engine with Firefox headers)
     try {
-      const bingUrl = `https://www.bing.com/search?q=${encodeURIComponent(normalizedQuery)}&count=${maxResults * 2}`;
-      const bingResp = await fetchWithTimeout(bingUrl, {
+      const ddgUrl = `https://html.duckduckgo.com/html/?q=${encodeURIComponent(normalizedQuery)}`;
+      const ddgResp = await fetchWithTimeout(ddgUrl, {
         cache: 'no-store',
-        headers: {
-          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
-          'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-          'Accept-Language': 'en-US,en;q=0.9',
-        },
+        headers: firefoxHeaders,
       });
-      if (bingResp.ok) {
-        const html = await bingResp.text();
+      if (ddgResp.ok) {
+        const html = await ddgResp.text();
         const $ = cheerio.load(html);
-        $('li.b_algo').each((_, el) => {
+        $('.result').each((_, el) => {
           if (results.length >= maxResults) return false;
-          const titleEl = $(el).find('h2 a');
-          let url = titleEl.attr('href') || '';
-          const title = titleEl.text().trim();
-          const snippet = $(el).find('.b_caption p, .b_algoSlug, .b_lineclamp2').first().text().trim();
-
-          // Decode Bing redirect wrapper URL (e.g. /ck/a?!&&p=...&u=a1aHR0cHM...)
-          if (url.includes('bing.com/ck/a')) {
-            try {
-              const uParam = new URL(url).searchParams.get('u');
-              if (uParam) {
-                const raw = uParam.startsWith('a1') ? uParam.slice(2) : uParam;
-                const decoded = Buffer.from(raw, 'base64url').toString('utf-8');
-                if (decoded.startsWith('http')) url = decoded;
-              }
-            } catch {}
+          const titleEl = $(el).find('.result__title a');
+          const snippet = $(el).find('.result__snippet').text().trim();
+          const rawUrl = titleEl.attr('href') || '';
+          let url = rawUrl.startsWith('//') ? `https:${rawUrl}` : rawUrl;
+          if (rawUrl.includes('uddg=')) {
+            const m = rawUrl.match(/uddg=([^&]+)/);
+            if (m?.[1]) url = decodeURIComponent(m[1]);
           }
-
-          if (url && title && url.startsWith('http') && !url.includes('bing.com/ck/a')) {
+          const title = titleEl.text().trim();
+          if (url && title && url.startsWith('http') && !results.some(r => r.url === url)) {
             results.push({ title, url, snippet: snippet || title, source: 'web' });
           }
         });
       }
     } catch { /* fall through */ }
 
-    // Tier 3: DuckDuckGo GET HTML provider. Keep it alongside Bing because
-    // technical and post-cutoff queries often rank better there.
-    const ddgResults: WebSearchResult[] = [];
-    {
-      try {
-        const ddgUrl = `https://html.duckduckgo.com/html/?q=${encodeURIComponent(normalizedQuery)}`;
-        const ddgResp = await fetchWithTimeout(ddgUrl, {
-          cache: 'no-store',
-          headers: {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
-            'Accept-Language': 'en-US,en;q=0.9',
-          },
-        });
-        if (ddgResp.ok) {
-          const html = await ddgResp.text();
-          const $ = cheerio.load(html);
-          $('.result').each((_, el) => {
-            if (ddgResults.length >= maxResults) return false;
-            const titleEl = $(el).find('.result__title a');
-            const snippet = $(el).find('.result__snippet').text().trim();
-            const rawUrl = titleEl.attr('href') || '';
-            let url = rawUrl.startsWith('//') ? `https:${rawUrl}` : rawUrl;
-            if (rawUrl.includes('uddg=')) {
-              const m = rawUrl.match(/uddg=([^&]+)/);
-              if (m?.[1]) url = decodeURIComponent(m[1]);
-            }
-            const title = titleEl.text().trim();
-            if (url && title && url.startsWith('http') && !results.some(r => r.url === url) && !ddgResults.some(r => r.url === url)) {
-              ddgResults.push({ title, url, snippet: snippet || title, source: 'web' });
-            }
-          });
-          results.push(...ddgResults);
-        }
-      } catch { /* fall through */ }
-    }
-
-    // Tier 4: DuckDuckGo Lite fallback
+    // Tier 3: DuckDuckGo Lite GET provider
     if (results.length < maxResults) {
       try {
-        const liteResp = await fetchWithTimeout('https://lite.duckduckgo.com/lite/', {
-          method: 'POST',
+        const liteUrl = `https://lite.duckduckgo.com/lite/?q=${encodeURIComponent(normalizedQuery)}`;
+        const liteResp = await fetchWithTimeout(liteUrl, {
           cache: 'no-store',
-          headers: {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
-            'Accept-Language': 'en-US,en;q=0.9',
-            'Content-Type': 'application/x-www-form-urlencoded',
-          },
-          body: new URLSearchParams({ q: normalizedQuery }).toString(),
+          headers: firefoxHeaders,
         });
         if (liteResp.ok) {
           const html = await liteResp.text();
           const $ = cheerio.load(html);
+          let currentItem: Partial<WebSearchResult> | null = null;
           $('tr').each((_, el) => {
             if (results.length >= maxResults) return false;
             const link = $(el).find('a.result-link');
-            const snippet = $(el).next().find('td.result-snippet').text().trim();
-            const rawUrl = link.attr('href') || '';
-            let url = rawUrl;
-            if (rawUrl.includes('uddg=')) {
-              const m = rawUrl.match(/uddg=([^&]+)/);
-              if (m?.[1]) url = decodeURIComponent(m[1]);
+            const snippetTd = $(el).find('td.result-snippet');
+            if (link.length > 0) {
+              const title = link.text().trim();
+              const rawUrl = link.attr('href') || '';
+              let url = rawUrl;
+              if (rawUrl.includes('uddg=')) {
+                const m = rawUrl.match(/uddg=([^&]+)/);
+                if (m?.[1]) url = decodeURIComponent(m[1]);
+              }
+              if (title && url && url.startsWith('http') && !results.some(r => r.url === url)) {
+                currentItem = { title, url, snippet: '', source: 'web' };
+              }
+            } else if (snippetTd.length > 0 && currentItem) {
+              currentItem.snippet = snippetTd.text().trim();
+              results.push(currentItem as WebSearchResult);
+              currentItem = null;
             }
-            const title = link.text().trim();
-            if (url && title && !url.startsWith('/') && url.startsWith('http') && !results.some(r => r.url === url)) {
+          });
+        }
+      } catch { /* fall through */ }
+    }
+
+    // Tier 4: Bing HTML Scraper (with fixed Base64URL decoding)
+    if (results.length < maxResults) {
+      try {
+        const bingUrl = `https://www.bing.com/search?q=${encodeURIComponent(normalizedQuery)}&count=${maxResults * 2}`;
+        const bingResp = await fetchWithTimeout(bingUrl, {
+          cache: 'no-store',
+          headers: firefoxHeaders,
+        });
+        if (bingResp.ok) {
+          const html = await bingResp.text();
+          const $ = cheerio.load(html);
+          $('li.b_algo').each((_, el) => {
+            if (results.length >= maxResults) return false;
+            const titleEl = $(el).find('h2 a');
+            let url = titleEl.attr('href') || '';
+            const title = titleEl.text().trim();
+            const snippet = $(el).find('.b_caption p, .b_algoSlug, .b_lineclamp2').first().text().trim();
+
+            if (url.includes('bing.com/ck/a')) {
+              try {
+                const uParam = new URL(url).searchParams.get('u');
+                if (uParam) {
+                  let raw = uParam.startsWith('a1') ? uParam.slice(2) : uParam;
+                  raw = raw.replace(/-/g, '+').replace(/_/g, '/');
+                  while (raw.length % 4 !== 0) raw += '=';
+                  const decoded = Buffer.from(raw, 'base64').toString('utf-8');
+                  if (decoded.startsWith('http')) url = decoded;
+                }
+              } catch {}
+            }
+
+            if (url && title && url.startsWith('http') && !url.includes('bing.com') && !results.some(r => r.url === url)) {
               results.push({ title, url, snippet: snippet || title, source: 'web' });
             }
           });
@@ -177,52 +176,21 @@ export async function searchLiveWeb(query: string, maxResults = 5): Promise<WebS
       } catch { /* fall through */ }
     }
 
-    // Tier 5: Wikipedia Search API fallback
-    if (results.length === 0) {
+    // Tier 5: Wikipedia OpenSearch API fallback
+    if (results.length < 3) {
       try {
-        const wikiUrl = `https://en.wikipedia.org/w/api.php?action=query&list=search&srsearch=${encodeURIComponent(normalizedQuery)}&format=json&origin=*`;
-        const wikiResp = await fetchWithTimeout(wikiUrl, { cache: 'no-store' });
+        const wikiUrl = `https://en.wikipedia.org/w/api.php?action=query&list=search&srsearch=${encodeURIComponent(normalizedQuery)}&utf8=&format=json`;
+        const wikiResp = await fetchWithTimeout(wikiUrl);
         if (wikiResp.ok) {
           const data = await wikiResp.json();
-          const wikiItems = data.query?.search || [];
-          wikiItems.slice(0, 3).forEach((item: any) => {
-            const cleanSnippet = (item.snippet || '').replace(/<[^>]*>/g, '').trim();
-            results.push({
-              title: item.title,
-              url: `https://en.wikipedia.org/wiki/${encodeURIComponent(item.title.replace(/\s+/g, '_'))}`,
-              snippet: cleanSnippet || item.title,
-              source: 'web',
-            });
-          });
-        }
-      } catch {}
-    }
-
-    // Last-resort structured fallback for environments that block HTML search pages.
-    if (results.length === 0) {
-      try {
-        const instantUrl = `https://api.duckduckgo.com/?q=${encodeURIComponent(normalizedQuery)}&format=json&no_html=1&skip_disambig=1`;
-        const instantResp = await fetchWithTimeout(instantUrl, { cache: 'no-store' });
-        if (instantResp.ok) {
-          const data = await instantResp.json();
-          const related = Array.isArray(data.RelatedTopics) ? data.RelatedTopics : [];
-          if (data.AbstractURL && data.AbstractText) {
-            results.push({
-              title: data.Heading || normalizedQuery,
-              url: data.AbstractURL,
-              snippet: data.AbstractText,
-              source: 'web',
-            });
-          }
-          for (const item of related) {
+          const hits = data.query?.search || [];
+          for (const hit of hits) {
             if (results.length >= maxResults) break;
-            if (item?.FirstURL && item?.Text) {
-              results.push({
-                title: item.Text.split(' - ')[0].trim() || item.Text,
-                url: item.FirstURL,
-                snippet: item.Text,
-                source: 'web',
-              });
+            const title = hit.title;
+            const snippet = hit.snippet ? hit.snippet.replace(/<[^>]+>/g, '').trim() : title;
+            const url = `https://en.wikipedia.org/wiki/${encodeURIComponent(title.replace(/ /g, '_'))}`;
+            if (!results.some(r => r.url === url)) {
+              results.push({ title, url, snippet, source: 'web' });
             }
           }
         }
@@ -238,7 +206,16 @@ export async function searchLiveWeb(query: string, maxResults = 5): Promise<WebS
     'react.dev', 'nextjs.org', 'nodejs.org', 'developer.mozilla.org',
     'typescriptlang.org', 'docs.python.org', 'docs.docker.com', 'github.com',
   ];
-  const unique = Array.from(new Map(results.filter((result) => result.url).map((result) => [result.url, result])).values());
+  const noiseDomains = [
+    'merriam-webster.com', 'dictionary.com', 'sapling.ai', 'wiktionary.org',
+    'collinsdictionary.com', 'dictionary.cambridge.org', 'vocabulary.com',
+    'redkiwiapp.com', 'thesaurus.com', 'wordreference.com',
+  ];
+
+  // Filter out noise domains (dictionaries)
+  const filtered = results.filter(r => r.url && !noiseDomains.some(d => r.url.toLowerCase().includes(d)));
+  const unique = Array.from(new Map(filtered.map((result) => [result.url, result])).values());
+
   unique.sort((a, b) => {
     const score = (result: WebSearchResult) => {
       const haystack = `${result.title} ${result.snippet} ${result.url}`.toLowerCase();
