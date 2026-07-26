@@ -132,7 +132,7 @@ export async function POST(req: Request) {
 
           try {
             // Immediately emit status so client shows activity in <100ms
-            enqueue(`[[STATUS:Searching the web for "${cleanedQuery.slice(0, 50)}…"]]\n`);
+            enqueue(`[[STATUS:Searching live web sources for "${cleanedQuery.slice(0, 45)}…"]]\n`);
 
             // AI mode is web-only: combine the client search with fresh retrieval, then
             // broaden once when the first provider returns too few useful sources.
@@ -181,7 +181,7 @@ export async function POST(req: Request) {
             });
 
             enqueue(`[[SOURCES:${sourcesPayload}]]\n`);
-            enqueue(`[[STEP:synthesizing]]\n\n`);
+            enqueue(`[[STATUS:Reading top web sources & documentation…]]\n`);
 
             // Step 5: Fetch the most relevant pages so the model gets evidence, not only SERP text.
             const pageContext = await Promise.all(
@@ -190,6 +190,9 @@ export async function POST(req: Request) {
                 return { url: result.url, content: page.content.slice(0, 1800) };
               })
             );
+
+            enqueue(`[[STATUS:Synthesizing response from verified evidence…]]\n`);
+            enqueue(`[[STEP:synthesizing]]\n\n`);
             const pageContextByUrl = new Map(pageContext.map((page) => [page.url, page.content]));
             const numberedSources = webResults
               .map((r, i) => {

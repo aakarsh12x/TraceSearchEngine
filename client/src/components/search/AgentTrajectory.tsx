@@ -190,6 +190,17 @@ export const CodeBlock = React.memo(function CodeBlock({ node, inline, className
   );
 });
 
+const AGENT_THOUGHT_STEPS = [
+  'Thinking…',
+  'Searching live web sources…',
+  'Reading retrieved pages & documentation…',
+  'Extracting key insights & evidence…',
+  'Analyzing technical specifications…',
+  'Verifying code examples & details…',
+  'Synthesizing comprehensive answer…',
+  'Formulating final response…',
+];
+
 export function AgentTrajectory({
   completion, isAILoading, searchMode, onSelectFollowUp, onInspectConcept
 }: AgentTrajectoryProps) {
@@ -199,6 +210,21 @@ export function AgentTrajectory({
   const [deferredCompletion, setDeferredCompletion] = useState(completion);
   const rafRef = useRef<number | null>(null);
   const pendingRef = useRef(completion);
+
+  // Dynamic step rotator to keep user engaged while agent processes
+  const [dynamicStepIndex, setDynamicStepIndex] = useState(0);
+
+  useEffect(() => {
+    if (!isAILoading) {
+      setDynamicStepIndex(0);
+      return;
+    }
+    const interval = setInterval(() => {
+      setDynamicStepIndex((prev) => (prev + 1) % AGENT_THOUGHT_STEPS.length);
+    }, 1500);
+
+    return () => clearInterval(interval);
+  }, [isAILoading]);
 
   useEffect(() => {
     pendingRef.current = completion;
@@ -220,11 +246,15 @@ export function AgentTrajectory({
     }
   }, [isAILoading, completion]);
 
-  // Parse live tokens (status/step) from raw stream — cheap, no markdown parse
-  const liveStatus = useMemo(() => {
-    const m = completion.match(/\[\[STATUS:([^\]]+)\]\]/);
-    return m ? m[1].trim() : '';
+  // Read latest live status from stream
+  const liveStatusMatches = useMemo(() => {
+    return Array.from(completion.matchAll(/\[\[STATUS:([^\]]+)\]\]/g)).map(m => m[1].trim());
   }, [completion]);
+
+  const latestLiveStatus = liveStatusMatches.length > 0
+    ? liveStatusMatches[liveStatusMatches.length - 1]
+    : '';
+
   const liveStep = useMemo(() => {
     const m = completion.match(/\[\[STEP:([^\]]+)\]\]/);
     return m ? m[1].trim() : '';
@@ -238,28 +268,40 @@ export function AgentTrajectory({
 
   const isAgentic = searchMode === 'agentic';
 
-  const loadingLabel = liveStep === 'synthesizing'
-    ? 'Writing answer…'
-    : (liveStatus || 'Searching the web…');
+  // Determine current active loading message — prioritizes backend updates, cycles dynamic thoughts otherwise
+  const displayStatus = useMemo(() => {
+    if (latestLiveStatus) return latestLiveStatus;
+    if (liveStep === 'synthesizing') return 'Synthesizing answer…';
+    return AGENT_THOUGHT_STEPS[dynamicStepIndex];
+  }, [latestLiveStatus, liveStep, dynamicStepIndex]);
 
   return (
     <div className="w-full space-y-5">
 
-      {/* Minimal single-line loading status — shown while agent is working */}
+      {/* Dynamic agent reasoning status — smoothly rotates thought steps & backend progress */}
       {isAgentic && isAILoading && !markdown && (
-        <motion.div
-          key={loadingLabel}
-          initial={{ opacity: 0 }}
-          animate={{ opacity: 1 }}
-          className="flex items-center gap-2"
-        >
-          <motion.span
-            className="inline-block w-1 h-1 rounded-full bg-zinc-500"
-            animate={{ opacity: [0.2, 0.8, 0.2] }}
-            transition={{ duration: 1.4, repeat: Infinity, ease: 'easeInOut' }}
-          />
-          <span className="text-xs font-mono text-zinc-500">{loadingLabel}</span>
-        </motion.div>
+        <AnimatePresence mode="wait">
+          <motion.div
+            key={displayStatus}
+            initial={{ opacity: 0, y: 3 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: -3 }}
+            transition={{ duration: 0.2, ease: 'easeOut' }}
+            className="flex items-center gap-2.5 py-0.5"
+          >
+            <div className="relative flex items-center justify-center w-2 h-2">
+              <motion.span
+                className="absolute inline-flex w-full h-full rounded-full bg-cyan-500/50"
+                animate={{ scale: [1, 1.8, 1], opacity: [0.6, 0, 0.6] }}
+                transition={{ duration: 1.4, repeat: Infinity, ease: 'easeInOut' }}
+              />
+              <span className="relative inline-flex w-1.5 h-1.5 rounded-full bg-cyan-400" />
+            </div>
+            <span className="text-xs font-mono text-zinc-400 font-medium tracking-wide">
+              {displayStatus}
+            </span>
+          </motion.div>
+        </AnimatePresence>
       )}
 
       {/* Source pills — compact horizontal row above key concepts */}
