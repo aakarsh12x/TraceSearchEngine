@@ -3,13 +3,14 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { useCompletion } from '@ai-sdk/react';
-import ReactMarkdown from 'react-markdown';
 import { Terminal } from '@/components/ui/terminal';
-import { ShimmerButton } from '@/components/ui/shimmer-button';
 import { TextAnimate } from '@/components/ui/text-animate';
 import { CanvasText } from '@/components/ui/canvas-text';
 import { NoiseBackground } from '@/components/ui/noise-background';
 import { Aurora } from '@/components/ui/aurora';
+import { AgentModeSwitch, SearchMode } from '@/components/search/AgentModeSwitch';
+import { AgentTrajectory } from '@/components/search/AgentTrajectory';
+import { ConceptDrawer } from '@/components/search/ConceptDrawer';
 
 // ─── Animation constants (module-level = zero re-creation cost per render) ────
 const EASE = [0.32, 0.72, 0, 1] as const;
@@ -177,7 +178,7 @@ function SearchInput({
         onKeyDown={onKeyDown}
         onFocus={onFocus}
         onBlur={onBlur}
-        placeholder={compact ? 'Search or ask anything…' : 'Ask anything (Press ↵ for AI)…'}
+        placeholder={compact ? 'Search…' : 'Ask anything…'}
         className="w-full outline-none"
         style={{
           transition: 'border-color 0.18s ease, box-shadow 0.18s ease, background-color 0.18s ease',
@@ -277,6 +278,9 @@ export default function Home() {
   const [hasSearched, setHasSearched] = useState(false);
   const [isFocused, setIsFocused] = useState(false);
   const [isAITriggered, setIsAITriggered] = useState(false);
+  const [searchMode, setSearchMode] = useState<SearchMode>('agentic'); // Default: Agentic AI Search Mode
+  const [chatHistory, setChatHistory] = useState<{ role: 'user' | 'assistant'; content: string }[]>([]);
+  const [inspectedConcept, setInspectedConcept] = useState<string | null>(null);
   const [page, setPage] = useState(1);
   const PAGE_SIZE = 10;
   const heroInputRef = useRef<HTMLInputElement>(null);
@@ -287,13 +291,10 @@ export default function Home() {
   const keepSearchFocusRef = useRef(true);
 
   // ── Index readiness polling ───────────────────────────────────────────────
-  // A module-level ref ensures React Strict Mode's double effect invocation
-  // shares the same cancelled flag — preventing two concurrent poll loops.
   const [showReadyBanner, setShowReadyBanner] = useState(true);
   const pollingStoppedRef = useRef(false);
 
   useEffect(() => {
-    // Reset on mount (handles Strict Mode remount)
     pollingStoppedRef.current = false;
     let timerId: ReturnType<typeof setTimeout>;
 
@@ -303,7 +304,6 @@ export default function Home() {
       clearTimeout(timerId);
     };
 
-    // Hard fallback: always dismiss after 15 s even if backend never responds ready
     const fallback = setTimeout(dismiss, 15_000);
 
     const poll = async () => {
@@ -314,10 +314,10 @@ export default function Home() {
         if (data.indexReady) {
           clearTimeout(fallback);
           dismiss();
-          return; // stop — index is ready
+          return;
         }
       } catch {
-        // Backend not reachable yet — keep trying
+        // Backend loading
       }
       if (!pollingStoppedRef.current) {
         timerId = setTimeout(poll, 1_500);
@@ -330,16 +330,35 @@ export default function Home() {
       clearTimeout(timerId);
       clearTimeout(fallback);
     };
-  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Smoothly morph to results mode as soon as they type or trigger search (Google-style)
   const isResultsMode = isAITriggered || hasSearched || query.trim().length >= 2;
 
   const { completion, complete, isLoading: isAILoading, setCompletion, stop } = useCompletion({
     api: '/api/ai-answer',
     streamProtocol: 'text',
+    onFinish: (_prompt, completionText) => {
+      if (completionText) {
+        setChatHistory(prev => [...prev, { role: 'assistant', content: completionText }]);
+      }
+    },
   });
+
+  const handleModeChange = useCallback((newMode: SearchMode) => {
+    if (newMode === searchMode) return;
+    stop();
+    setCompletion('');
+    setIsAITriggered(false);
+    setSearchMode(newMode);
+    setQuery('');
+    setResults([]);
+    setIsLoadingResults(false);
+    setHasSearched(false);
+    setChatHistory([]);
+    setInspectedConcept(null);
+    lastSubmittedQueryRef.current = '';
+    searchAbortRef.current?.abort();
+  }, [searchMode, setCompletion, stop]);
 
   const runSearch = useCallback(async (term: string) => {
     const trimmed = term.trim();
@@ -348,6 +367,7 @@ export default function Home() {
     searchAbortRef.current?.abort();
     const controller = new AbortController();
     const requestId = searchRequestRef.current + 1;
+
     searchRequestRef.current = requestId;
     searchAbortRef.current = controller;
     setIsLoadingResults(true);
@@ -387,7 +407,6 @@ export default function Home() {
   useEffect(() => {
     const trimmed = query.trim();
 
-    // 1. If user edited the query after submitting, cancel AI generation and reset
     if (lastSubmittedQueryRef.current && trimmed !== lastSubmittedQueryRef.current) {
       stop();
       setCompletion('');
@@ -395,7 +414,6 @@ export default function Home() {
       lastSubmittedQueryRef.current = '';
     }
 
-    // 2. Handle completely empty query (return to Home / Hero state)
     if (trimmed.length === 0) {
       searchAbortRef.current?.abort();
       setIsLoadingResults(false);
@@ -409,7 +427,6 @@ export default function Home() {
       return;
     }
 
-    // 3. Handle short query (1 character) - keep in Results mode if already there, but clear results
     if (trimmed.length < 2) {
       searchAbortRef.current?.abort();
       setIsLoadingResults(false);
@@ -417,14 +434,15 @@ export default function Home() {
       return;
     }
 
-    // 4. Handle valid search query (>= 2 characters) - trigger search with debounce
-    const t = setTimeout(() => {
-      setHasSearched(true);
-      setPage(1);
-      void runSearch(trimmed);
-    }, 500);
-    return () => clearTimeout(t);
-  }, [query, runSearch, setCompletion, stop]);
+    if (searchMode === 'direct') {
+      const t = setTimeout(() => {
+        setHasSearched(true);
+        setPage(1);
+        void runSearch(trimmed);
+      }, 500);
+      return () => clearTimeout(t);
+    }
+  }, [query, runSearch, searchMode, setCompletion, stop]);
 
   useEffect(() => {
     return () => {
@@ -433,22 +451,37 @@ export default function Home() {
     };
   }, [stop]);
 
-  // AI trigger (manual)
-  const handleSearch = useCallback(async () => {
-    const trimmed = query.trim();
-    if (trimmed.length < 2) return;
+  // AI trigger (manual or follow-up)
+  const handleSearch = useCallback(async (explicitTerm?: string | unknown) => {
+    // Guard: only accept plain string — onClick passes a MouseEvent, not a string
+    const safeExplicit = typeof explicitTerm === 'string' ? explicitTerm : undefined;
+    const target = (safeExplicit || query).trim();
+    if (target.length < 2) return;
     stop();
     setIsAITriggered(true);
     setCompletion('');
     setHasSearched(true);
     setPage(1);
-    lastSubmittedQueryRef.current = trimmed;
-
-    const cur = await runSearch(trimmed);
-    if (cur.length > 0 && lastSubmittedQueryRef.current === trimmed) {
-      complete(trimmed, { body: { results: cur.slice(0, 4) } });
+    lastSubmittedQueryRef.current = target;
+    if (safeExplicit) {
+      setQuery(safeExplicit);
     }
-  }, [complete, query, runSearch, setCompletion, stop]);
+
+    const nextHistory = [...chatHistory, { role: 'user' as const, content: target }];
+    setChatHistory(nextHistory);
+
+    if (searchMode === 'agentic') {
+      // AGENTIC MODE: Autonomous Live Web Search ONLY (Zero local db search)
+      setResults([]);
+      complete(target, { body: { searchMode: 'agentic', messages: nextHistory } });
+    } else {
+      // DIRECT MODE: Fast local index search + crisp 250-token AI summary
+      const cur = await runSearch(target);
+      if (lastSubmittedQueryRef.current === target) {
+        complete(target, { body: { results: cur.slice(0, 4), searchMode: 'direct', messages: nextHistory } });
+      }
+    }
+  }, [chatHistory, complete, query, runSearch, searchMode, setCompletion, stop]);
 
   const handleKeyDown = useCallback((e: React.KeyboardEvent<HTMLInputElement>) => {
     if (e.key === 'Enter') {
@@ -457,12 +490,11 @@ export default function Home() {
     }
   }, [handleSearch]);
 
-  // Stable callbacks — wrapped in useCallback so SearchInput never re-renders
-  // due to a new function reference on unrelated state changes.
   const handleFocus = useCallback(() => {
     keepSearchFocusRef.current = true;
     setIsFocused(true);
   }, []);
+
   const handleBlur = useCallback(() => {
     requestAnimationFrame(() => {
       const active = document.activeElement;
@@ -472,14 +504,8 @@ export default function Home() {
     });
   }, []);
 
-  // ── Focus management: when layout flips to results mode the hero input
-  // unmounts and the compact top-bar input mounts. Using a ref + effect keeps
-  // the cursor alive through the animation instead of relying on autoFocus
-  // (which fires on DOM insertion and races with Framer Motion transitions).
   useEffect(() => {
     if (isResultsMode) {
-      // requestAnimationFrame defers until after the browser has painted the
-      // new DOM node, so the compact input is guaranteed to exist.
       const raf = requestAnimationFrame(() => {
         const node = compactInputRef.current;
         if (!node || !keepSearchFocusRef.current) return;
@@ -522,7 +548,6 @@ export default function Home() {
               fontFamily: "'Geist Mono', ui-monospace, monospace",
             }}
           >
-            {/* Amber pulsing dot */}
             <span
               className="inline-block w-2 h-2 rounded-full flex-shrink-0"
               style={{
@@ -531,34 +556,14 @@ export default function Home() {
                 animation: 'pulse 1.4s ease-in-out infinite',
               }}
             />
-
-            {/* Label */}
             <span className="text-[11px] font-medium" style={{ color: '#71717a', letterSpacing: '0.04em' }}>
               Getting ready{'\u2009·\u2009'}loading index…
-            </span>
-
-            {/* Shimmer progress bar */}
-            <span
-              className="absolute bottom-0 left-0 h-[2px] rounded-b-xl overflow-hidden w-full"
-              style={{ background: 'transparent' }}
-            >
-              <span
-                className="block h-full w-1/2 rounded-full"
-                style={{
-                  background: 'linear-gradient(90deg, transparent, #f59e0b88, transparent)',
-                  animation: 'shimmer-bar 1.6s ease-in-out infinite',
-                }}
-              />
             </span>
           </motion.div>
         )}
       </AnimatePresence>
 
-
-
-
-
-      {/* Aurora green glow — slides down and fades when search activates */}
+      {/* Aurora green glow */}
       <div
         className="fixed bottom-0 left-0 right-0 h-[38vh] overflow-hidden pointer-events-none select-none"
         style={{
@@ -579,7 +584,6 @@ export default function Home() {
         />
       </div>
 
-
       {/* ── FIXED TOP BAR (results mode) ──────────────────────────────── */}
       <AnimatePresence>
         {isResultsMode && (
@@ -589,7 +593,7 @@ export default function Home() {
             animate={{ opacity: 1, y: 0 }}
             exit={{ opacity: 0, y: -20 }}
             transition={{ duration: DUR, ease: EASE }}
-            className="fixed top-0 left-0 right-0 z-50 flex items-center gap-4 px-4 sm:px-6 py-3 border-b"
+            className="fixed top-0 left-0 right-0 z-50 flex items-center gap-3 px-4 sm:px-6 py-3 border-b"
             style={{
               backgroundColor: 'rgba(9,10,13,0.88)',
               backdropFilter: 'blur(18px)',
@@ -597,22 +601,23 @@ export default function Home() {
               willChange: 'opacity, transform',
             }}
           >
-            {/* Left: logo — slides in from the left */}
+            {/* Left: logo */}
             <motion.div
               initial={{ opacity: 0, x: -16 }}
               animate={{ opacity: 1, x: 0 }}
               transition={{ duration: 0.28, ease: EASE, delay: 0.04 }}
-              className="hidden sm:block w-auto min-w-[5rem] shrink-0"
+              className="hidden sm:block shrink-0"
             >
               <span
-                className="text-xl font-semibold select-none"
+                className="text-xl font-semibold select-none cursor-pointer"
+                onClick={() => setQuery('')}
                 style={{ fontFamily: "'Audiowide', cursive", color: '#f8fafc', letterSpacing: '0' }}
               >
                 Trace
               </span>
             </motion.div>
 
-            {/* Center: search bar — fades + scales in */}
+            {/* Center: search bar */}
             <motion.div
               initial={{ opacity: 0, scaleX: 0.92 }}
               animate={{ opacity: 1, scaleX: 1 }}
@@ -620,31 +625,19 @@ export default function Home() {
               className="flex-1 flex justify-center min-w-0"
               style={{ transformOrigin: 'center' }}
             >
-              <div className="w-full max-w-2xl">
+              <div className="w-full max-w-xl">
                 <SearchInput {...inputProps} compact inputRef={compactInputRef} />
               </div>
             </motion.div>
 
-            {/* Right: NIM GPT ACTIVE badge */}
+            {/* Right: Agent Mode Switcher Toggle */}
             <motion.div
               initial={{ opacity: 0, x: 16 }}
               animate={{ opacity: 1, x: 0 }}
               transition={{ duration: 0.28, ease: EASE, delay: 0.06 }}
-              className="hidden sm:flex w-auto min-w-[5rem] shrink-0 justify-end"
+              className="flex shrink-0 items-center gap-2"
             >
-              <span
-                className="px-2.5 py-1 rounded-full text-[10px] font-medium border whitespace-nowrap"
-                style={{
-                  backgroundColor: '#111216',
-                  borderColor: '#2a2d34',
-                  color: '#a1a1aa',
-                  fontFamily: "'Geist Mono', monospace",
-                  letterSpacing: '0.08em',
-                }}
-              >
-                <span className="inline-block w-1.5 h-1.5 rounded-full bg-teal-400 mr-1.5 align-middle shadow-[0_0_8px_rgba(45,212,191,0.55)]" />
-                NIM GPT
-              </span>
+              <AgentModeSwitch mode={searchMode} onModeChange={handleModeChange} compact />
             </motion.div>
           </motion.header>
         )}
@@ -654,7 +647,7 @@ export default function Home() {
       <div
         className="relative z-10 flex flex-col items-center px-4 w-full min-h-screen justify-start"
         style={{
-          paddingTop: isResultsMode ? '5rem' : 'calc(50vh - 180px)',
+          paddingTop: isResultsMode ? '5rem' : 'calc(50vh - 210px)',
         }}
       >
 
@@ -674,7 +667,7 @@ export default function Home() {
               style={{ willChange: 'opacity, transform' }}
               className="text-center w-full max-w-2xl flex flex-col items-center"
             >
-              <div className="inline-flex items-center gap-2 mb-7">
+              <div className="inline-flex items-center gap-2 mb-6">
                 <NoiseBackground
                   containerClassName="rounded-full p-[1.5px]"
                   gradientColors={[
@@ -687,16 +680,16 @@ export default function Home() {
                   noiseFrequency={0.8}
                 >
                   <span
-                    className="inline-flex items-center gap-1.5 rounded-full px-3 py-1.5 text-xs"
+                    className="inline-flex items-center gap-1.5 rounded-full px-3.5 py-1.5 text-xs"
                     style={{
                       backgroundColor: '#090a0d',
                       fontFamily: 'ui-monospace, monospace',
                       letterSpacing: '0.04em',
                     }}
                   >
-                    <span style={{ color: '#3f3f46' }}>ai</span>
+                    <span style={{ color: '#3f3f46' }}>agent</span>
                     <span style={{ color: '#27272a' }}>/</span>
-                    <span style={{ color: '#34d399', fontWeight: 600 }}>nim</span>
+                    <span style={{ color: '#34d399', fontWeight: 600 }}>live-web-search</span>
                     <span style={{ color: '#27272a' }}>·</span>
                     <span style={{ color: '#52525b' }}>llama-3.1-70b</span>
                   </span>
@@ -715,8 +708,8 @@ export default function Home() {
                   Trace
                 </TextAnimate>
               </div>
-              <p className="text-base mb-8" style={{ color: '#b6beca' }}>
-                Search engine for{' '}
+              <p className="text-base mb-6" style={{ color: '#b6beca' }}>
+                Agentic search engine for{' '}
                 <span style={{ filter: 'drop-shadow(0 0 12px rgba(45,212,191,0.45))' }}>
                   <CanvasText
                     text="developers"
@@ -737,11 +730,16 @@ export default function Home() {
                     animationDuration={8}
                     curveIntensity={28}
                   />
-                </span>{' '}by a developer
+                </span>
               </p>
 
+              {/* Mode Switcher in Hero */}
+              <div className="mb-5">
+                <AgentModeSwitch mode={searchMode} onModeChange={handleModeChange} />
+              </div>
+
               <div className="relative w-full">
-                <SearchInput {...inputProps} inputRef={heroInputRef} autoFocus />  {/* hero: autoFocus is safe here, it only fires once on initial page load */}
+                <SearchInput {...inputProps} inputRef={heroInputRef} autoFocus />
               </div>
             </motion.div>
           )}
@@ -750,7 +748,7 @@ export default function Home() {
         {/* RESULTS */}
         <div className="w-full max-w-2xl">
 
-          {/* AI Terminal */}
+          {/* AI Answer Panel */}
           <AnimatePresence>
             {isResultsMode && (
               <motion.div
@@ -758,38 +756,63 @@ export default function Home() {
                 animate={{ opacity: 1 }}
                 exit={{ opacity: 0 }}
                 transition={{ duration: 0.2, ease: 'easeOut' }}
-                className="w-full mt-4 relative z-10"
-                style={{ willChange: 'opacity, transform' }}
+                className="w-full mt-6 relative z-10"
+                style={{ willChange: 'opacity' }}
               >
-                <Terminal sequence={false} className="w-full shadow-[0_24px_80px_rgba(0,0,0,0.28)]">
-                  <div className="flex items-center gap-2 mb-3 text-[10px] font-bold uppercase tracking-widest text-teal-300/85">
-                    <span className="flex h-1.5 w-1.5 rounded-full bg-teal-400 shadow-[0_0_8px_rgba(45,212,191,0.5)]" />
-                    Answer Engine
+                {searchMode === 'agentic' ? (
+                  // Agentic mode: clean frameless layout
+                  <div className="w-full">
+                    <AgentTrajectory
+                      completion={completion}
+                      isAILoading={isAILoading}
+                      searchMode={searchMode}
+                      onSelectFollowUp={(q) => void handleSearch(q)}
+                      onInspectConcept={(term) => setInspectedConcept(term)}
+                    />
+                    {!isAITriggered && !isAILoading && !completion && (
+                      <p className="text-xs text-zinc-600 mt-1">
+                        Press <kbd className="font-mono px-1 py-0.5 rounded bg-zinc-900 border border-zinc-800 text-zinc-400">Enter</kbd> to search the web
+                      </p>
+                    )}
                   </div>
-                  {isAILoading && !completion && (
-                    <p className="text-zinc-500 italic text-sm animate-pulse">Synthesizing context…</p>
-                  )}
-                  {completion && (
-                    <div className="text-zinc-300 text-sm leading-relaxed prose prose-invert max-w-none prose-pre:bg-zinc-950 prose-pre:border prose-pre:border-zinc-800">
-                      <ReactMarkdown>{completion}</ReactMarkdown>
+                ) : (
+                  // Direct mode: subtle bordered container
+                  <div
+                    className="w-full rounded-xl border border-zinc-800/60 bg-zinc-950 p-4"
+                    style={{ boxShadow: '0 8px 32px rgba(0,0,0,0.3)' }}
+                  >
+                    <div className="flex items-center justify-between mb-4">
+                      <span className="text-[11px] font-mono text-zinc-600 uppercase tracking-wider">
+                        Local Index
+                      </span>
+                      <span className="text-[11px] font-mono text-zinc-700">
+                        Direct Search
+                      </span>
                     </div>
-                  )}
-                  {!isAITriggered && !isAILoading && !completion && (
-                    <div className="flex items-center gap-2 text-zinc-500/80 text-sm italic">
-                      Press <kbd className="font-sans px-1.5 py-0.5 rounded-md bg-zinc-800 border border-zinc-700 text-zinc-400 text-xs shadow-sm">Enter</kbd> to generate an AI summary
-                    </div>
-                  )}
-                  {isAITriggered && !isAILoading && !completion && results.length === 0 && !isLoadingResults && (
-                    <div className="text-zinc-500/80 text-sm italic">No source context found for an AI answer.</div>
-                  )}
-                </Terminal>
+                    <AgentTrajectory
+                      completion={completion}
+                      isAILoading={isAILoading}
+                      searchMode={searchMode}
+                      onSelectFollowUp={(q) => void handleSearch(q)}
+                      onInspectConcept={(term) => setInspectedConcept(term)}
+                    />
+                    {!isAITriggered && !isAILoading && !completion && (
+                      <p className="text-xs text-zinc-600 mt-1">
+                        Press <kbd className="font-mono px-1 py-0.5 rounded bg-zinc-900 border border-zinc-800 text-zinc-400">Enter</kbd> to generate answer
+                      </p>
+                    )}
+                    {isAITriggered && !isAILoading && !completion && results.length === 0 && !isLoadingResults && (
+                      <p className="text-xs text-zinc-600 mt-1">No results found in local index.</p>
+                    )}
+                  </div>
+                )}
               </motion.div>
             )}
           </AnimatePresence>
 
-          {/* Traditional Results */}
+          {/* Traditional Source Results (Shown only in Direct Search Mode) */}
           <AnimatePresence>
-            {results.length > 0 && (() => {
+            {results.length > 0 && searchMode === 'direct' && (() => {
               const totalPages = Math.ceil(results.length / PAGE_SIZE);
               const pageResults = results.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE);
 
@@ -803,7 +826,7 @@ export default function Home() {
                   {/* Header row */}
                   <div className="flex items-center justify-between mb-6 pl-1">
                     <h3 className="text-zinc-500 text-xs font-semibold tracking-wider uppercase border-l-2 border-teal-500/40 pl-2">
-                      Source Results
+                      Local Index Results
                     </h3>
                     <span className="text-zinc-600 text-xs font-mono">
                       {(page - 1) * PAGE_SIZE + 1}–{Math.min(page * PAGE_SIZE, results.length)} of {results.length}
@@ -845,7 +868,6 @@ export default function Home() {
                       transition={{ duration: 0.3, ease: 'easeOut' }}
                       className="flex items-center justify-center gap-2 mt-6 mb-8 select-none"
                     >
-                      {/* Prev */}
                       <button
                         disabled={page === 1}
                         onClick={() => { setPage(p => p - 1); window.scrollTo({ top: 0, behavior: 'smooth' }); }}
@@ -857,7 +879,6 @@ export default function Home() {
                         Prev
                       </button>
 
-                      {/* Page numbers */}
                       <div className="flex items-center gap-1">
                         {Array.from({ length: totalPages }, (_, i) => i + 1)
                           .filter(p => p === 1 || p === totalPages || Math.abs(p - page) <= 1)
@@ -886,7 +907,6 @@ export default function Home() {
                         }
                       </div>
 
-                      {/* Next */}
                       <button
                         disabled={page === totalPages}
                         onClick={() => { setPage(p => p + 1); window.scrollTo({ top: 0, behavior: 'smooth' }); }}
@@ -894,7 +914,7 @@ export default function Home() {
                       >
                         Next
                         <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2.5">
-                          <path strokeLinecap="round" strokeLinejoin="round" d="M13.5 4.5L21 12m0 0l-7.5 7.5M21 12H3" />
+                          <path strokeLinecap="round" strokeLinejoin="round" d="M13.5 4.5L21 12m0 0l7.5-7.5M21 12H3" />
                         </svg>
                       </button>
                     </motion.div>
@@ -906,6 +926,13 @@ export default function Home() {
 
         </div>
       </div>
+
+      {/* Side Concept Inspector Drawer */}
+      <ConceptDrawer
+        term={inspectedConcept}
+        mainQuery={query}
+        onClose={() => setInspectedConcept(null)}
+      />
     </main>
   );
 }
