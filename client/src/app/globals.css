@@ -38,6 +38,15 @@ body {
   background: #3f3f46;
 }
 
+/* ─── Utility: hide scrollbar but keep scroll behaviour ─────────────────── */
+.scrollbar-hide {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+.scrollbar-hide::-webkit-scrollbar {
+  display: none;
+}
+
 /* ─── Meteor animation ───────────────────────────────────────────────────── */
 @keyframes meteor-fall {
   0% {

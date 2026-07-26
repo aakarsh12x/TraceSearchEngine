@@ -245,24 +245,24 @@ export function AgentTrajectory({
         </motion.div>
       )}
 
-      {/* Source cards — the core proof of live web retrieval */}
+      {/* Source pills — compact horizontal row above key concepts */}
       <AnimatePresence>
         {isAgentic && sources.length > 0 && (
           <motion.div
-            initial={{ opacity: 0, y: 8 }}
+            initial={{ opacity: 0, y: 6 }}
             animate={{ opacity: 1, y: 0 }}
-            transition={{ duration: 0.28, ease: [0.32, 0.72, 0, 1] }}
+            transition={{ duration: 0.24, ease: [0.32, 0.72, 0, 1] }}
+            className="space-y-2"
           >
-            {/* Section header */}
-            <div className="flex items-center gap-3 mb-3">
-              <span className="text-[11px] font-mono text-zinc-600 uppercase tracking-wider">
-                {sources.length} source{sources.length !== 1 ? 's' : ''} retrieved
+            <div className="flex items-center gap-2">
+              <span className="text-[10px] font-mono text-zinc-600 uppercase tracking-wider shrink-0">
+                {sources.length} source{sources.length !== 1 ? 's' : ''}
               </span>
-              <div className="flex-1 h-px bg-zinc-800" />
+              <div className="flex-1 h-px bg-zinc-800/60" />
             </div>
 
-            {/* Source card grid */}
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2">
+            {/* Horizontal scroll row of compact source pills */}
+            <div className="flex gap-1.5 overflow-x-auto pb-0.5 scrollbar-hide">
               {sources.map((source, idx) => {
                 const domain = getDomain(source.url);
                 return (
@@ -271,61 +271,45 @@ export function AgentTrajectory({
                     href={source.url}
                     target="_blank"
                     rel="noopener noreferrer"
-                    initial={{ opacity: 0 }}
-                    animate={{ opacity: 1 }}
-                    transition={{ delay: idx * 0.04 }}
-                    className="group flex flex-col gap-1.5 p-3 rounded-xl border border-zinc-800/60
-                               bg-zinc-950 hover:border-zinc-700 hover:bg-zinc-900/80
-                               transition-all duration-150 no-underline"
+                    initial={{ opacity: 0, scale: 0.92 }}
+                    animate={{ opacity: 1, scale: 1 }}
+                    transition={{ delay: idx * 0.03 }}
+                    className="group flex items-center gap-1.5 px-2 py-1 rounded-lg border border-zinc-800/70
+                               bg-zinc-950 hover:border-zinc-700 hover:bg-zinc-900
+                               transition-all duration-150 no-underline shrink-0 max-w-[160px]"
+                    title={source.title || domain}
                   >
-                    {/* Domain row */}
-                    <div className="flex items-center gap-2 min-w-0">
-                      <img
-                        src={`https://www.google.com/s2/favicons?domain=${domain}&sz=16`}
-                        alt=""
-                        width={12}
-                        height={12}
-                        className="flex-shrink-0 opacity-70 rounded-[2px]"
-                        onError={(e) => {
-                          (e.target as HTMLImageElement).style.display = 'none';
-                        }}
-                      />
-                      <span className="text-[10px] font-mono text-zinc-500 truncate flex-1 min-w-0">
-                        {domain}
-                      </span>
-                      <span
-                        className="flex-shrink-0 text-[10px] font-mono text-zinc-600
-                                   bg-zinc-800 px-1.5 py-0.5 rounded"
-                      >
-                        {idx + 1}
-                      </span>
-                    </div>
-
-                    {/* Title */}
-                    <p className="text-xs font-medium text-zinc-400 group-hover:text-zinc-200
-                                  line-clamp-2 leading-snug transition-colors duration-100">
-                      {source.title || domain}
-                    </p>
+                    <img
+                      src={`https://www.google.com/s2/favicons?domain=${domain}&sz=16`}
+                      alt=""
+                      width={11}
+                      height={11}
+                      className="flex-shrink-0 opacity-60 rounded-[2px]"
+                      onError={(e) => { (e.target as HTMLImageElement).style.display = 'none'; }}
+                    />
+                    <span className="text-[10px] font-mono text-zinc-500 group-hover:text-zinc-300 truncate transition-colors">
+                      {domain}
+                    </span>
+                    <span className="flex-shrink-0 text-[9px] font-mono text-zinc-700 bg-zinc-800/80 px-1 rounded">
+                      {idx + 1}
+                    </span>
                   </motion.a>
                 );
               })}
             </div>
-
-            {/* Thin separator before answer */}
-            <div className="mt-5 border-t border-zinc-800/40" />
           </motion.div>
         )}
       </AnimatePresence>
 
-      {/* Key Concepts Chips Bar (Clickable Side Inspector Trigger) */}
+      {/* Key Concepts chips */}
       <AnimatePresence>
         {concepts.length > 0 && (
           <motion.div
             initial={{ opacity: 0, y: 4 }}
             animate={{ opacity: 1, y: 0 }}
-            className="flex flex-wrap items-center gap-2 pt-1"
+            className="flex flex-wrap items-center gap-1.5"
           >
-            <span className="text-[10px] font-mono text-zinc-500 uppercase tracking-wider pr-1">
+            <span className="text-[10px] font-mono text-zinc-600 uppercase tracking-wider pr-0.5">
               Key Concepts:
             </span>
             {concepts.map((concept, idx) => (
@@ -343,7 +327,6 @@ export function AgentTrajectory({
           </motion.div>
         )}
       </AnimatePresence>
-
 
 
       {/* The answer — with inline numbered citation links & ChatGPT/Claude style syntax highlighting */}

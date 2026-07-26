@@ -15,147 +15,140 @@ export interface PageContentResult {
 }
 
 /**
- * Searches the live web using DuckDuckGo HTML API with cheerio parsing.
- * Supports Tavily / Serper API key fallback if configured in environment.
+ * Searches the live web using a 4-tier fallback chain:
+ * 1. Tavily API (if TAVILY_API_KEY is set)
+ * 2. DuckDuckGo HTML POST
+ * 3. DuckDuckGo Lite POST
+ * 4. Bing HTML scraping (most reliable server-side fallback)
  */
 export async function searchLiveWeb(query: string, maxResults = 5): Promise<WebSearchResult[]> {
   const results: WebSearchResult[] = [];
 
   try {
-    // Check if Tavily API key is available
+    // Tier 1: Tavily API (richest snippets)
     const tavilyKey = process.env.TAVILY_API_KEY;
     if (tavilyKey) {
-      const resp = await fetch('https://api.tavily.com/search', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          api_key: tavilyKey,
-          query: query,
-          search_depth: 'basic',
-          include_answer: false,
-          max_results: maxResults,
-        }),
-      });
-      if (resp.ok) {
-        const data = await resp.json();
-        if (data.results && Array.isArray(data.results)) {
-          return data.results.map((r: any) => ({
-            title: r.title || r.url,
-            url: r.url,
-            snippet: r.content || r.snippet || '',
-            source: 'web' as const,
-          }));
-        }
-      }
-    }
-
-    // Default: Free zero-config DuckDuckGo HTML/Lite web search fetcher
-    let response = await fetch('https://html.duckduckgo.com/html/', {
-      method: 'POST',
-      headers: {
-        'User-Agent':
-          'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
-        'Accept-Language': 'en-US,en;q=0.9',
-        'Content-Type': 'application/x-www-form-urlencoded',
-      },
-      body: new URLSearchParams({ q: query }).toString(),
-    });
-
-    if (!response.ok) {
-      // Fallback to GET request
-      const ddgUrl = `https://html.duckduckgo.com/html/?q=${encodeURIComponent(query)}`;
-      response = await fetch(ddgUrl, {
-        headers: {
-          'User-Agent':
-            'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
-          'Accept-Language': 'en-US,en;q=0.9',
-        },
-      });
-    }
-
-    if (response.ok) {
-      const html = await response.text();
-      const $ = cheerio.load(html);
-
-      $('.result').each((_, element) => {
-        if (results.length >= maxResults) return false;
-
-        const titleEl = $(element).find('.result__title a');
-        const snippetEl = $(element).find('.result__snippet');
-        const rawUrl = titleEl.attr('href') || '';
-
-        let cleanUrl = rawUrl;
-        if (rawUrl.includes('uddg=')) {
-          try {
-            const match = rawUrl.match(/uddg=([^&]+)/);
-            if (match && match[1]) {
-              cleanUrl = decodeURIComponent(match[1]);
-            }
-          } catch {
-            cleanUrl = rawUrl;
+      try {
+        const resp = await fetch('https://api.tavily.com/search', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            api_key: tavilyKey,
+            query,
+            search_depth: 'basic',
+            include_answer: false,
+            max_results: maxResults,
+          }),
+        });
+        if (resp.ok) {
+          const data = await resp.json();
+          if (data.results?.length) {
+            return data.results.map((r: any) => ({
+              title: r.title || r.url,
+              url: r.url,
+              snippet: r.content || r.snippet || '',
+              source: 'web' as const,
+            }));
           }
         }
-
-        const title = titleEl.text().trim();
-        const snippet = snippetEl.text().trim();
-
-        if (cleanUrl && title && !cleanUrl.startsWith('/')) {
-          results.push({
-            title,
-            url: cleanUrl,
-            snippet,
-            source: 'web',
-          });
-        }
-      });
+      } catch { /* fall through */ }
     }
 
-    // Secondary fallback to Lite endpoint if HTML returned zero results
-    if (results.length === 0) {
-      const liteResp = await fetch('https://lite.duckduckgo.com/lite/', {
+    // Tier 2: DuckDuckGo HTML POST
+    const ddgHeaders = {
+      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+      'Accept-Language': 'en-US,en;q=0.9',
+      'Content-Type': 'application/x-www-form-urlencoded',
+    };
+
+    try {
+      const ddgResp = await fetch('https://html.duckduckgo.com/html/', {
         method: 'POST',
-        headers: {
-          'User-Agent':
-            'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
-          'Content-Type': 'application/x-www-form-urlencoded',
-        },
+        headers: ddgHeaders,
         body: new URLSearchParams({ q: query }).toString(),
       });
-
-      if (liteResp.ok) {
-        const html = await liteResp.text();
+      if (ddgResp.ok) {
+        const html = await ddgResp.text();
         const $ = cheerio.load(html);
-
-        $('tr').each((_, element) => {
+        $('.result').each((_, el) => {
           if (results.length >= maxResults) return false;
-          const link = $(element).find('a.result-link');
-          const snippetTd = $(element).next().find('td.result-snippet');
-
-          const rawUrl = link.attr('href') || '';
-          const title = link.text().trim();
-          const snippet = snippetTd.text().trim();
-
-          let cleanUrl = rawUrl;
+          const titleEl = $(el).find('.result__title a');
+          const snippet = $(el).find('.result__snippet').text().trim();
+          const rawUrl = titleEl.attr('href') || '';
+          let url = rawUrl;
           if (rawUrl.includes('uddg=')) {
-            try {
-              const match = rawUrl.match(/uddg=([^&]+)/);
-              if (match && match[1]) cleanUrl = decodeURIComponent(match[1]);
-            } catch {}
+            const m = rawUrl.match(/uddg=([^&]+)/);
+            if (m?.[1]) url = decodeURIComponent(m[1]);
           }
-
-          if (cleanUrl && title && !cleanUrl.startsWith('/')) {
-            results.push({
-              title,
-              url: cleanUrl,
-              snippet: snippet || title,
-              source: 'web',
-            });
+          const title = titleEl.text().trim();
+          if (url && title && !url.startsWith('/') && url.startsWith('http')) {
+            results.push({ title, url, snippet, source: 'web' });
           }
         });
       }
+    } catch { /* fall through */ }
+
+    // Tier 3: DuckDuckGo Lite POST
+    if (results.length < 2) {
+      try {
+        const liteResp = await fetch('https://lite.duckduckgo.com/lite/', {
+          method: 'POST',
+          headers: ddgHeaders,
+          body: new URLSearchParams({ q: query }).toString(),
+        });
+        if (liteResp.ok) {
+          const html = await liteResp.text();
+          const $ = cheerio.load(html);
+          $('tr').each((_, el) => {
+            if (results.length >= maxResults) return false;
+            const link = $(el).find('a.result-link');
+            const snippet = $(el).next().find('td.result-snippet').text().trim();
+            const rawUrl = link.attr('href') || '';
+            let url = rawUrl;
+            if (rawUrl.includes('uddg=')) {
+              const m = rawUrl.match(/uddg=([^&]+)/);
+              if (m?.[1]) url = decodeURIComponent(m[1]);
+            }
+            const title = link.text().trim();
+            if (url && title && !url.startsWith('/') && url.startsWith('http')) {
+              results.push({ title, url, snippet: snippet || title, source: 'web' });
+            }
+          });
+        }
+      } catch { /* fall through */ }
     }
+
+    // Tier 4: Bing HTML scraping — most reliable server-side fallback
+    if (results.length < 2) {
+      try {
+        const bingUrl = `https://www.bing.com/search?q=${encodeURIComponent(query)}&count=${maxResults * 2}`;
+        const bingResp = await fetch(bingUrl, {
+          headers: {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+            'Accept-Language': 'en-US,en;q=0.9',
+          },
+        });
+        if (bingResp.ok) {
+          const html = await bingResp.text();
+          const $ = cheerio.load(html);
+          // Bing result selectors: li.b_algo
+          $('li.b_algo').each((_, el) => {
+            if (results.length >= maxResults) return false;
+            const titleEl = $(el).find('h2 a');
+            const url = titleEl.attr('href') || '';
+            const title = titleEl.text().trim();
+            const snippet = $(el).find('.b_caption p, .b_algoSlug').first().text().trim();
+            if (url && title && url.startsWith('http')) {
+              results.push({ title, url, snippet, source: 'web' });
+            }
+          });
+        }
+      } catch { /* fall through */ }
+    }
+
   } catch (error) {
-    console.error('Error performing live web search:', error);
+    console.error('Live web search error:', error);
   }
 
   return results;
