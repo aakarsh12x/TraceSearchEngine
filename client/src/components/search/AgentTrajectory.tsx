@@ -21,58 +21,65 @@ interface AgentTrajectoryProps {
   onInspectConcept?: (concept: string) => void;
 }
 
+export interface ToolCallStep {
+  tool: string;
+  label: string;
+}
+
 export function parseAgentCompletion(rawText: string): {
   sources: Source[];
   status: string;
   followUps: string[];
   concepts: string[];
+  toolCalls: ToolCallStep[];
   markdown: string;
 } {
   let sources: Source[] = [];
   let status = '';
   let followUps: string[] = [];
   let concepts: string[] = [];
+  let toolCalls: ToolCallStep[] = [];
 
   const sourcesMatch = rawText.match(/\[\[SOURCES:([\s\S]*?)\]\]/);
   if (sourcesMatch) {
     try {
       const parsed = JSON.parse(sourcesMatch[1]);
       sources = parsed.sources || [];
-      if (Array.isArray(parsed.followUps)) {
-        followUps = parsed.followUps;
-      }
-      if (Array.isArray(parsed.concepts)) {
-        concepts = parsed.concepts;
-      }
+      if (Array.isArray(parsed.followUps)) followUps = parsed.followUps;
+      if (Array.isArray(parsed.concepts)) concepts = parsed.concepts;
     } catch {}
   }
 
   const statusMatch = rawText.match(/\[\[STATUS:([\s\S]*?)\]\]/);
-  if (statusMatch) {
-    status = statusMatch[1].trim();
+  if (statusMatch) status = statusMatch[1].trim();
+
+  // Parse all [[TOOL_CALL:tool|label]] tokens
+  const toolCallRegex = /\[\[TOOL_CALL:([^|\]]+)\|([^\]]+)\]\]/g;
+  let tc;
+  while ((tc = toolCallRegex.exec(rawText)) !== null) {
+    toolCalls.push({ tool: tc[1].trim(), label: tc[2].trim() });
   }
 
   const followUpsMatch = rawText.match(/\[\[FOLLOW_UPS:([\s\S]*?)\]\]/);
   if (followUpsMatch) {
     try {
       const parsed = JSON.parse(followUpsMatch[1]);
-      if (Array.isArray(parsed) && parsed.length > 0) {
-        followUps = parsed;
-      }
+      if (Array.isArray(parsed) && parsed.length > 0) followUps = parsed;
     } catch {}
   }
 
-  // Strip control blocks, unclosed control tags, and any trailing unparsed syntax
+  // Strip all control tokens from markdown
   let markdown = rawText
     .replace(/\[\[SOURCES:[\s\S]*?\]\]/g, '')
     .replace(/\[\[STATUS:[\s\S]*?\]\]/g, '')
+    .replace(/\[\[TOOL_CALL:[^\]]*\]\]/g, '')
     .replace(/\[\[FOLLOW_UPS:[\s\S]*?\]\]/g, '')
     .replace(/\[\[FOLLOW_UPS:[\s\S]*/g, '')
     .replace(/\[\[SOURCES:[\s\S]*/g, '')
     .replace(/\[\[STATUS:[\s\S]*/g, '')
+    .replace(/\[\[TOOL_CALL:[\s\S]*/g, '')
     .trim();
 
-  // Replace inline [n] citations with clickable markdown links [[n]](url)
   sources.forEach((source, idx) => {
     const n = idx + 1;
     markdown = markdown.replace(
@@ -81,7 +88,7 @@ export function parseAgentCompletion(rawText: string): {
     );
   });
 
-  return { sources, status, followUps, concepts, markdown };
+  return { sources, status, followUps, concepts, toolCalls, markdown };
 }
 
 function getDomain(url: string): string {
@@ -169,28 +176,126 @@ export function CodeBlock({ node, inline, className, children, onInspectConcept,
   );
 }
 
+// Tool icon map for visual hints
+function ToolIcon({ tool }: { tool: string }) {
+  if (tool === 'fetch_full_page') {
+    return (
+      <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
+        <path strokeLinecap="round" strokeLinejoin="round" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+      </svg>
+    );
+  }
+  // search_web icon
+  return (
+    <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
+      <path strokeLinecap="round" strokeLinejoin="round" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+    </svg>
+  );
+}
+
 export function AgentTrajectory({
   completion, isAILoading, searchMode, onSelectFollowUp, onInspectConcept
 }: AgentTrajectoryProps) {
-  const { sources, status, followUps, concepts, markdown } = parseAgentCompletion(completion || '');
+  const { sources, status, followUps, concepts, toolCalls, markdown } = parseAgentCompletion(completion || '');
   const isAgentic = searchMode === 'agentic';
 
   return (
     <div className="w-full space-y-5">
 
-      {/* Subtle status line while searching (before sources arrive) */}
+      {/* Pre-sources loading state */}
       {isAgentic && isAILoading && sources.length === 0 && (
         <div className="flex items-center gap-2.5">
           <motion.span
-            className="inline-block w-1.5 h-1.5 rounded-full bg-zinc-500"
-            animate={{ opacity: [0.3, 1, 0.3] }}
-            transition={{ duration: 1.4, repeat: Infinity, ease: 'easeInOut' }}
+            className="inline-block w-1.5 h-1.5 rounded-full bg-teal-500"
+            animate={{ opacity: [0.3, 1, 0.3], scale: [0.8, 1.2, 0.8] }}
+            transition={{ duration: 1.2, repeat: Infinity, ease: 'easeInOut' }}
           />
-          <span className="text-xs font-mono text-zinc-500">
+          <span className="text-xs font-mono text-zinc-400">
             {status || 'Searching the web…'}
           </span>
         </div>
       )}
+
+      {/* Tool Call Activity Feed — shows each ReAct step the agent takes */}
+      <AnimatePresence>
+        {isAgentic && toolCalls.length > 0 && (
+          <motion.div
+            initial={{ opacity: 0, y: 4 }}
+            animate={{ opacity: 1, y: 0 }}
+            className="flex flex-col gap-1.5"
+          >
+            {toolCalls.map((step, idx) => {
+              const isDone = !isAILoading || idx < toolCalls.length - 1;
+              return (
+                <motion.div
+                  key={idx}
+                  initial={{ opacity: 0, x: -8 }}
+                  animate={{ opacity: 1, x: 0 }}
+                  transition={{ delay: idx * 0.05, duration: 0.2 }}
+                  className="flex items-center gap-2"
+                >
+                  {/* Step indicator */}
+                  {isDone ? (
+                    <span className="flex-shrink-0 w-4 h-4 rounded-full bg-zinc-800 border border-zinc-700 flex items-center justify-center">
+                      <svg className="w-2.5 h-2.5 text-teal-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="3">
+                        <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
+                      </svg>
+                    </span>
+                  ) : (
+                    <motion.span
+                      className="flex-shrink-0 w-4 h-4 rounded-full bg-zinc-900 border border-teal-500/50 flex items-center justify-center"
+                      animate={{ borderColor: ['rgba(20,184,166,0.3)', 'rgba(20,184,166,0.8)', 'rgba(20,184,166,0.3)'] }}
+                      transition={{ duration: 1.4, repeat: Infinity }}
+                    >
+                      <motion.span
+                        className="w-1.5 h-1.5 rounded-full bg-teal-400"
+                        animate={{ opacity: [0.4, 1, 0.4] }}
+                        transition={{ duration: 1.2, repeat: Infinity }}
+                      />
+                    </motion.span>
+                  )}
+
+                  {/* Tool name badge + label */}
+                  <div className="flex items-center gap-1.5 min-w-0">
+                    <span className={`flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-mono flex-shrink-0 ${
+                      isDone
+                        ? 'bg-zinc-900 text-zinc-500 border border-zinc-800'
+                        : 'bg-teal-950/60 text-teal-400 border border-teal-800/60'
+                    }`}>
+                      <ToolIcon tool={step.tool} />
+                      {step.tool}
+                    </span>
+                    <span className="text-xs font-mono text-zinc-500 truncate min-w-0">
+                      {step.label}
+                    </span>
+                  </div>
+                </motion.div>
+              );
+            })}
+
+            {/* Synthesizing state after tool calls while answer streams in */}
+            {isAILoading && toolCalls.length > 0 && !markdown && (
+              <motion.div
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+                className="flex items-center gap-2 pl-0"
+              >
+                <motion.span
+                  className="flex-shrink-0 w-4 h-4 rounded-full bg-zinc-900 border border-zinc-700 flex items-center justify-center"
+                  animate={{ borderColor: ['rgba(113,113,122,0.4)', 'rgba(113,113,122,0.9)', 'rgba(113,113,122,0.4)'] }}
+                  transition={{ duration: 1.4, repeat: Infinity }}
+                >
+                  <motion.span className="w-1.5 h-1.5 rounded-full bg-zinc-400"
+                    animate={{ opacity: [0.3, 1, 0.3] }}
+                    transition={{ duration: 1.2, repeat: Infinity }}
+                  />
+                </motion.span>
+                <span className="text-xs font-mono text-zinc-500">Synthesizing answer…</span>
+              </motion.div>
+            )}
+          </motion.div>
+        )}
+      </AnimatePresence>
 
       {/* Source cards — the core proof of live web retrieval */}
       <AnimatePresence>
@@ -291,15 +396,15 @@ export function AgentTrajectory({
         )}
       </AnimatePresence>
 
-      {/* Synthesizing indicator after sources appear */}
-      {isAgentic && isAILoading && sources.length > 0 && !markdown && (
+      {/* Synthesizing fallback (if no tool calls streamed yet) */}
+      {isAgentic && isAILoading && sources.length > 0 && !markdown && toolCalls.length === 0 && (
         <div className="flex items-center gap-2.5">
           <motion.span
-            className="inline-block w-1.5 h-1.5 rounded-full bg-zinc-500"
-            animate={{ opacity: [0.3, 1, 0.3] }}
-            transition={{ duration: 1.4, repeat: Infinity, ease: 'easeInOut' }}
+            className="inline-block w-1.5 h-1.5 rounded-full bg-teal-500"
+            animate={{ opacity: [0.3, 1, 0.3], scale: [0.8, 1.2, 0.8] }}
+            transition={{ duration: 1.2, repeat: Infinity, ease: 'easeInOut' }}
           />
-          <span className="text-xs font-mono text-zinc-500">Synthesizing answer…</span>
+          <span className="text-xs font-mono text-zinc-400">Synthesizing answer…</span>
         </div>
       )}
 

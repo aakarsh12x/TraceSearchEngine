@@ -5,7 +5,6 @@ import { searchLiveWeb, fetchPageContent, triggerAutoIndex, WebSearchResult } fr
 
 function generateFollowUps(query: string, results: WebSearchResult[]): string[] {
   const q = query.toLowerCase();
-
   if (q.includes('docker')) {
     return [
       'How do I mount a local directory volume into a Docker container?',
@@ -34,10 +33,8 @@ function generateFollowUps(query: string, results: WebSearchResult[]): string[] 
       'How do I build production-ready REST APIs with FastAPI?'
     ];
   }
-
   const topic = query.replace(/^(how to|what is|how do i|running|learn|guide for)\s+/i, '').trim();
   const topTitle = results[0]?.title ? results[0].title.split(/[-|:]/)[0].trim() : topic;
-
   return [
     `What are the most common errors when working with ${topic}?`,
     `Can you provide a practical code example for ${topic}?`,
@@ -47,22 +44,20 @@ function generateFollowUps(query: string, results: WebSearchResult[]): string[] 
 
 function generateConcepts(query: string, results: WebSearchResult[]): string[] {
   const q = query.toLowerCase();
-
-  if (q.includes('docker')) {
-    return ['Docker Daemon', 'systemctl', 'Container Image', 'Volume Mounting'];
-  }
-  if (q.includes('react')) {
-    return ['Virtual DOM', 'useState Hook', 'Component Lifecycle', 'Reconciliation'];
-  }
-  if (q.includes('node') || q.includes('express')) {
-    return ['Event Loop', 'Express Middleware', 'Worker Threads', 'Non-blocking I/O'];
-  }
-  if (q.includes('python')) {
-    return ['Virtual Environment', 'asyncio', 'GIL (Global Interpreter Lock)', 'Package Index'];
-  }
-
+  if (q.includes('docker')) return ['Docker Daemon', 'systemctl', 'Container Image', 'Volume Mounting'];
+  if (q.includes('react')) return ['Virtual DOM', 'useState Hook', 'Component Lifecycle', 'Reconciliation'];
+  if (q.includes('node') || q.includes('express')) return ['Event Loop', 'Express Middleware', 'Worker Threads', 'Non-blocking I/O'];
+  if (q.includes('python')) return ['Virtual Environment', 'asyncio', 'GIL (Global Interpreter Lock)', 'Package Index'];
   const topic = query.replace(/^(how to|what is|how do i|running|learn|guide for)\s+/i, '').trim();
   return [topic, 'Configuration', 'CLI Command', 'Architecture'];
+}
+
+// Wraps a promise with a timeout — prevents tool calls from hanging indefinitely
+function withTimeout<T>(promise: Promise<T>, ms: number, fallback: T): Promise<T> {
+  return Promise.race([
+    promise,
+    new Promise<T>(resolve => setTimeout(() => resolve(fallback), ms)),
+  ]);
 }
 
 export async function POST(req: Request) {
@@ -74,11 +69,8 @@ export async function POST(req: Request) {
     }
 
     const currentQuery = prompt || messages[messages.length - 1]?.content || '';
-
     const apiKey = process.env.NVIDIA_KEY;
-    if (!apiKey) {
-      return new Response('NVIDIA_KEY environment variable is not set', { status: 500 });
-    }
+    if (!apiKey) return new Response('NVIDIA_KEY environment variable is not set', { status: 500 });
 
     const nvidiaClient = createOpenAI({
       baseURL: 'https://integrate.api.nvidia.com/v1',
@@ -89,41 +81,32 @@ export async function POST(req: Request) {
 
     if (searchMode === 'agentic') {
       // ── AGENTIC REACT MULTI-STEP TOOL-CALLING MODE ─────────────────────────
-
-      // Initial parallel discovery search to retrieve fast sources
       const variation = `${currentQuery} guide tutorial`;
       const [primary, secondary] = await Promise.all([
-        searchLiveWeb(currentQuery, 4),
-        searchLiveWeb(variation, 3),
+        withTimeout(searchLiveWeb(currentQuery, 4), 8000, []),
+        withTimeout(searchLiveWeb(variation, 3), 8000, []),
       ]);
 
-      // Deduplicate by URL
       const seen = new Map<string, WebSearchResult>();
       [...primary, ...secondary].forEach(r => {
         if (r.url && !seen.has(r.url)) seen.set(r.url, r);
       });
       const webResults = Array.from(seen.values()).slice(0, 6);
 
-      // Trigger background indexing — non-blocking
       triggerAutoIndex(webResults.map(r => r.url));
 
-      // Generate follow-up questions & key concepts
       const followUpQuestions = generateFollowUps(currentQuery, webResults);
       const keyConcepts = generateConcepts(currentQuery, webResults);
 
-      // Build SOURCES block (sent to client before answer stream)
       const sourcesPayload = JSON.stringify({
-        sources: webResults.map(r => ({
-          url: r.url,
-          title: r.title,
-          snippet: r.snippet,
-        })),
+        sources: webResults.map(r => ({ url: r.url, title: r.title, snippet: r.snippet })),
         followUps: followUpQuestions,
         concepts: keyConcepts,
       });
-      const header = `[[SOURCES:${sourcesPayload}]]\n[[STATUS:Autonomous agent inspecting sources for "${currentQuery}"]]\n\n`;
 
-      // Formatted initial context for the agent
+      // Header: sources + initial status + first tool call hint
+      const header = `[[SOURCES:${sourcesPayload}]]\n[[STATUS:Searching the live web for "${currentQuery}"]]\n[[TOOL_CALL:search_web|Querying web for "${currentQuery.slice(0, 60)}..."]]\n\n`;
+
       const numberedSources = webResults
         .map((r, i) => `[${i + 1}] ${r.title}\nURL: ${r.url}\nSnippet: ${r.snippet}`)
         .join('\n\n');
@@ -132,14 +115,15 @@ export async function POST(req: Request) {
 
 USER QUERY: "${currentQuery}"
 
-INITIAL WEB SOURCES:
-${numberedSources || 'No web results.'}
+INITIAL WEB SOURCES (already retrieved):
+${numberedSources || 'No web results pre-fetched.'}
 
-CRITICAL INSTRUCTIONS:
-1. Answer the user's query thoroughly using the web sources and tools.
-2. If initial snippets are insufficient, use the tool 'fetch_full_page' to read deep documentation.
-3. Cite sources inline using numbered brackets like [1], [2] immediately after factual claims.
-4. Include clean, working code blocks with language tags. Do NOT include preambles like "Based on web sources...".`;
+INSTRUCTIONS:
+1. Begin answering immediately from the sources above. Cite inline with [1], [2], etc.
+2. ONLY call fetch_full_page if a source snippet is genuinely insufficient and you need exact code syntax.
+3. Do NOT call search_web again — you already have the web results above.
+4. Keep your answer complete, with working code examples where relevant.
+5. Do NOT open with "Based on the sources" or similar filler.`;
 
       const formattedMessages = messages.length > 0
         ? messages.map((m: any) => ({
@@ -148,30 +132,26 @@ CRITICAL INSTRUCTIONS:
           }))
         : [{ role: 'user' as const, content: currentQuery }];
 
-      // Multi-step streaming ReAct agent execution (stopWhen: stepCountIs(5))
       const aiResult = await streamText({
         model: nvidiaClient.chat('meta/llama-3.1-70b-instruct'),
         system: systemPrompt,
         messages: formattedMessages,
-        stopWhen: stepCountIs(5),
+        stopWhen: stepCountIs(3), // Reduced from 5 to avoid long hangs
         tools: {
-          search_web: tool({
-            description: 'Search the live web for real-time documentation, libraries, or code examples.',
-            inputSchema: z.object({ query: z.string().describe('The search query') }),
-            execute: async ({ query }) => {
-              const searchRes = await searchLiveWeb(query, 4);
-              return { results: searchRes };
-            },
-          }),
           fetch_full_page: tool({
-            description: 'Fetch and read raw text and code snippets from a specific web URL.',
-            inputSchema: z.object({ url: z.string().describe('The web URL to inspect') }),
+            description: 'Fetch the full content of a web page URL for deeper documentation reading.',
+            inputSchema: z.object({ url: z.string().describe('The URL to read') }),
             execute: async ({ url }) => {
-              const pageData = await fetchPageContent(url);
+              // Emit a tool call progress token before fetching
+              const pageData = await withTimeout(
+                fetchPageContent(url),
+                8000,
+                { url, title: url, content: 'Page fetch timed out.', codeSnippets: [] }
+              );
               return {
                 title: pageData.title,
-                content: pageData.content.slice(0, 3500),
-                codeSnippets: pageData.codeSnippets.slice(0, 3),
+                content: pageData.content.slice(0, 3000),
+                codeSnippets: pageData.codeSnippets.slice(0, 2),
               };
             },
           }),
@@ -179,17 +159,25 @@ CRITICAL INSTRUCTIONS:
         maxOutputTokens: 1500,
       });
 
-      // Stream header first, then LLM text
+      // Stream: header first, then pipe LLM chunks with tool call progress events
       const combinedStream = new ReadableStream<Uint8Array>({
         async start(controller) {
           controller.enqueue(encoder.encode(header));
 
           try {
-            const reader = aiResult.textStream.getReader();
-            while (true) {
-              const { done, value } = await reader.read();
-              if (done) break;
-              controller.enqueue(encoder.encode(value));
+            // Use fullStream to intercept tool calls and emit progress tokens
+            for await (const part of aiResult.fullStream) {
+              if (part.type === 'text-delta') {
+                controller.enqueue(encoder.encode(part.text));
+              } else if (part.type === 'tool-call') {
+                // Emit a visible progress event the UI can render
+                const input = (part as any).input || (part as any).args || {};
+                const toolLabel = String(input?.url || input?.query || '').slice(0, 60);
+                const toolToken = `\n[[TOOL_CALL:${part.toolName}|Reading "${toolLabel}"]]\n`;
+                controller.enqueue(encoder.encode(toolToken));
+              } else if (part.type === 'error') {
+                console.error('Stream part error:', part.error);
+              }
             }
           } catch (e) {
             console.error('Stream read error:', e);
@@ -208,19 +196,14 @@ CRITICAL INSTRUCTIONS:
       });
 
     } else {
-      // ── DIRECT QUICK-FACT SEARCH MODE (Max 200 Tokens - Google Snippet Style) ──
+      // ── DIRECT QUICK-FACT SEARCH MODE ──────────────────────────────────────
       const context = results.slice(0, 4).map((r: any, i: number) =>
         `[${i + 1}] ${r.title} — ${r.url}\n${r.description || ''}`
       ).join('\n\n');
 
       const systemPrompt = `You are Trace Direct Search (like Google Featured Snippets).
-
-Your task is to answer the query in 1 to 3 short sentences. Give a direct answer first (e.g. YES/NO, exact command, or key fact), followed by a brief 1-sentence explanation.
-
-RULES:
-1. Maximum 150 to 200 tokens total.
-2. Be direct, instant, and concise. Zero preamble or intro filler.
-3. Highlight key facts or exact syntax.
+Answer in 1–3 short sentences. Lead with the direct fact/command/answer. Zero filler.
+Max 150–200 tokens.
 
 LOCAL CONTEXT:
 ${context || 'No local index matches.'}`;
