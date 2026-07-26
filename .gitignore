@@ -5,6 +5,7 @@ node_modules/
 
 # ── Next.js Build ────────────────────────────────────
 .next/
+client/.next/
 out/
 build/
 dist/
