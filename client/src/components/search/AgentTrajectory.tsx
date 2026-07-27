@@ -21,6 +21,19 @@ interface AgentTrajectoryProps {
   onInspectConcept?: (concept: string) => void;
 }
 
+const CLOSED_SOURCES_REGEX = /\[\[SOURCES:[\s\S]*?\]\]/g;
+const CLOSED_STATUS_REGEX = /\[\[STATUS:[\s\S]*?\]\]/g;
+const CLOSED_STEP_REGEX = /\[\[STEP:[\s\S]*?\]\]/g;
+const CLOSED_FOLLOW_UPS_REGEX = /\[\[FOLLOW_UPS:[\s\S]*?\]\]/g;
+
+const OPEN_SOURCES_REGEX = /\[\[SOURCES:[\s\S]*$/g;
+const OPEN_STATUS_REGEX = /\[\[STATUS:[\s\S]*$/g;
+const OPEN_STEP_REGEX = /\[\[STEP:[\s\S]*$/g;
+const OPEN_FOLLOW_UPS_REGEX = /\[\[FOLLOW_UPS:[\s\S]*$/g;
+
+// Pre-compiled static regex cache for citations up to 20 sources (zero allocation per frame)
+const CITATION_REGEX_CACHE: RegExp[] = Array.from({ length: 20 }, (_, i) => new RegExp(`\\[${i + 1}\\](?!\\()`, 'g'));
+
 export function parseAgentCompletion(rawText: string): {
   sources: Source[];
   status: string;
@@ -76,24 +89,25 @@ export function parseAgentCompletion(rawText: string): {
     } catch {}
   }
 
-  // Strip all control tokens from markdown
+  // Strip all closed control tokens from markdown using static cached regexes
   let markdown = rawText
-    .replace(/\[\[SOURCES:[\s\S]*?\]\]/g, '')
-    .replace(/\[\[STATUS:[^\]]*\]\]/g, '')
-    .replace(/\[\[STEP:[^\]]*\]\]/g, '')
-    .replace(/\[\[FOLLOW_UPS:[\s\S]*?\]\]/g, '')
-    .replace(/\[\[FOLLOW_UPS:[\s\S]*/g, '')
-    .replace(/\[\[SOURCES:[\s\S]*/g, '')
-    .replace(/\[\[STATUS:[\s\S]*/g, '')
-    .replace(/\[\[STEP:[\s\S]*/g, '')
+    .replace(CLOSED_SOURCES_REGEX, '')
+    .replace(CLOSED_STATUS_REGEX, '')
+    .replace(CLOSED_STEP_REGEX, '')
+    .replace(CLOSED_FOLLOW_UPS_REGEX, '');
+
+  // Strip any incomplete trailing control tokens currently being streamed at the end
+  markdown = markdown
+    .replace(OPEN_SOURCES_REGEX, '')
+    .replace(OPEN_STATUS_REGEX, '')
+    .replace(OPEN_STEP_REGEX, '')
+    .replace(OPEN_FOLLOW_UPS_REGEX, '')
     .trim();
 
   sources.forEach((source, idx) => {
     const n = idx + 1;
-    markdown = markdown.replace(
-      new RegExp(`\\[${n}\\](?!\\()`, 'g'),
-      `[[${n}]](${source.url})`
-    );
+    const regex = CITATION_REGEX_CACHE[idx] || new RegExp(`\\[${n}\\](?!\\()`, 'g');
+    markdown = markdown.replace(regex, `[[${n}]](${source.url})`);
   });
 
   return { sources, status, step, followUps, concepts, markdown };

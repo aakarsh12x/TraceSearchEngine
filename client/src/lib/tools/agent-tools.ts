@@ -234,10 +234,15 @@ export async function searchLiveWeb(query: string, maxResults = 5): Promise<WebS
  * Fetches and parses a web page URL to extract clean text and code blocks.
  */
 export async function fetchPageContent(url: string): Promise<PageContentResult> {
-  try {
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 6000);
+  // Skip non-scrapable media/app store domains that hang or block headless HTTP requests
+  if (/apps\.apple\.com|play\.google\.com|youtube\.com|youtu\.be/i.test(url)) {
+    return { url, title: url, content: '', codeSnippets: [] };
+  }
 
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 3000);
+
+  try {
     const response = await fetch(url, {
       signal: controller.signal,
       headers: {
@@ -245,7 +250,6 @@ export async function fetchPageContent(url: string): Promise<PageContentResult> 
           'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
       },
     });
-    clearTimeout(timeout);
 
     if (!response.ok) {
       return {
@@ -292,6 +296,8 @@ export async function fetchPageContent(url: string): Promise<PageContentResult> 
       content: `Could not reach URL: ${err.message || err}`,
       codeSnippets: [],
     };
+  } finally {
+    clearTimeout(timeout);
   }
 }
 

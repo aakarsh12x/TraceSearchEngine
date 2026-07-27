@@ -2,7 +2,6 @@
 
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { useCompletion } from '@ai-sdk/react';
 import { Terminal } from '@/components/ui/terminal';
 import { TextAnimate } from '@/components/ui/text-animate';
 import { CanvasText } from '@/components/ui/canvas-text';
@@ -334,17 +333,75 @@ export default function Home() {
 
   const isResultsMode = isAITriggered || hasSearched;
 
-  const { completion, complete, isLoading: isAILoading, setCompletion, stop } = useCompletion({
-    api: '/api/ai-answer',
-    streamProtocol: 'text',
-    onFinish: (prompt, completionText) => {
-      // An aborted stream may still report completion on the next tick. Ignore it
-      // unless it still belongs to the query currently owned by the UI.
-      if (prompt === lastSubmittedQueryRef.current && completionText) {
-        setChatHistory(prev => [...prev, { role: 'assistant', content: completionText }]);
+  const [completion, setCompletionState] = useState('');
+  const [isAILoading, setIsAILoading] = useState(false);
+  const aiAbortRef = useRef<AbortController | null>(null);
+
+  const setCompletion = useCallback((text: string) => setCompletionState(text), []);
+
+  const stop = useCallback(() => {
+    aiAbortRef.current?.abort();
+    aiAbortRef.current = null;
+    setIsAILoading(false);
+  }, []);
+
+  const streamAIAnswer = useCallback(async (
+    prompt: string,
+    body: Record<string, unknown>
+  ) => {
+    aiAbortRef.current?.abort();
+    const controller = new AbortController();
+    aiAbortRef.current = controller;
+    setIsAILoading(true);
+    setCompletionState('');
+
+    try {
+      const res = await fetch('/api/ai-answer', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ prompt, ...body }),
+        signal: controller.signal,
+      });
+
+      if (!res.ok || !res.body) {
+        console.error('AI fetch failed:', res.status);
+        setIsAILoading(false);
+        return;
       }
-    },
-  });
+
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let accumulated = '';
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        const chunk = decoder.decode(value, { stream: true });
+        accumulated += chunk;
+        setCompletionState(accumulated);
+      }
+
+      // Save to chat history on completion
+      if (!controller.signal.aborted) {
+        setChatHistory(prev => {
+          const last = prev[prev.length - 1];
+          if (last?.role === 'assistant') return prev;
+          return [...prev, { role: 'assistant' as const, content: accumulated }];
+        });
+      }
+    } catch (err: any) {
+      if (err?.name !== 'AbortError') {
+        console.error('AI stream error:', err);
+      }
+    } finally {
+      if (!controller.signal.aborted) {
+        setIsAILoading(false);
+      }
+      if (aiAbortRef.current === controller) {
+        aiAbortRef.current = null;
+      }
+    }
+  }, []);
 
   const resetToHome = useCallback(() => {
     stop();
@@ -482,13 +539,12 @@ export default function Home() {
     if (lastSubmittedQueryRef.current !== target) return;
 
     if (searchMode === 'agentic') {
-      // AI mode gets the same retrieved sources shown by the search pipeline.
-      complete(target, { body: { results: cur.slice(0, 8), searchMode: 'agentic', messages: nextHistory } });
+      void streamAIAnswer(target, { results: cur.slice(0, 8), searchMode: 'agentic', messages: nextHistory });
     } else {
-      // Direct mode uses the same results for a short local/web-grounded answer.
-      complete(target, { body: { results: cur.slice(0, 4), searchMode: 'direct', messages: nextHistory } });
+      void streamAIAnswer(target, { results: cur.slice(0, 4), searchMode: 'direct', messages: nextHistory });
     }
-  }, [chatHistory, complete, query, runSearch, searchMode, setCompletion, stop]);
+  }, [chatHistory, query, runSearch, searchMode, setCompletion, stop, streamAIAnswer]);
+
 
   const handleKeyDown = useCallback((e: React.KeyboardEvent<HTMLInputElement>) => {
     if (e.key === 'Enter') {

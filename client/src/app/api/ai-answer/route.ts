@@ -116,6 +116,8 @@ export async function POST(req: Request) {
     const apiKey = process.env.NVIDIA_KEY;
     if (!apiKey) return new Response('NVIDIA_KEY environment variable is not set', { status: 500 });
 
+    const selectedModel = process.env.NVIDIA_MODEL || 'meta/llama-3.1-70b-instruct';
+
     const nvidiaClient = createOpenAI({
       baseURL: 'https://integrate.api.nvidia.com/v1',
       apiKey: apiKey,
@@ -183,13 +185,17 @@ export async function POST(req: Request) {
             enqueue(`[[SOURCES:${sourcesPayload}]]\n`);
             enqueue(`[[STATUS:Reading top web sources & documentation…]]\n`);
 
-            // Step 5: Fetch the most relevant pages so the model gets evidence, not only SERP text.
-            const pageContext = await Promise.all(
+            // Step 5: Fetch the most relevant pages so the model gets evidence (with 3.5s hard deadline)
+            const pageContextPromise = Promise.all(
               webResults.slice(0, 3).map(async (result) => {
-                const page = await fetchPageContent(result.url);
-                return { url: result.url, content: page.content.slice(0, 1800) };
+                const page = await fetchPageContent(result.url).catch(() => ({ url: result.url, content: '' }));
+                return { url: result.url, content: (page.content || '').slice(0, 1800) };
               })
             );
+            const pageDeadline = new Promise<{ url: string; content: string }[]>((resolve) =>
+              setTimeout(() => resolve([]), 3500)
+            );
+            const pageContext = await Promise.race([pageContextPromise, pageDeadline]);
 
             enqueue(`[[STATUS:Synthesizing response from verified evidence…]]\n`);
             enqueue(`[[STEP:synthesizing]]\n\n`);
@@ -228,20 +234,44 @@ CRITICAL RAG GROUNDING & KNOWLEDGE RULES:
                 }))
               : [{ role: 'user' as const, content: currentQuery }];
 
-            // Step 6: Stream LLM synthesis directly
-            const aiResult = await streamText({
-              model: nvidiaClient.chat('meta/llama-3.1-70b-instruct'),
-              system: systemPrompt,
-              messages: formattedMessages,
-              maxOutputTokens: 1200,
-              abortSignal: req.signal,
-            });
+            // Step 6: Stream LLM synthesis — simple, safe pattern that worked before.
+            // tryStreamModel fully encapsulates the stream so errors from reader.read()
+            // are caught at the same scope as the streamText call.
+            const FALLBACK_MODEL = 'meta/llama-3.1-70b-instruct';
 
-            const reader = aiResult.textStream.getReader();
-            while (true) {
-              const { done, value } = await reader.read();
-              if (done) break;
-              enqueue(value);
+            async function tryStreamModel(modelId: string): Promise<boolean> {
+              try {
+                const aiResult = await streamText({
+                  model: nvidiaClient.chat(modelId),
+                  system: systemPrompt,
+                  messages: formattedMessages,
+                  maxOutputTokens: 1200,
+                  abortSignal: req.signal,
+                });
+                const reader = aiResult.textStream.getReader();
+                while (true) {
+                  const { done, value } = await reader.read();
+                  if (done) break;
+                  enqueue(value);
+                }
+                return true;
+              } catch (err: any) {
+                console.error(`[Trace] Model ${modelId} failed:`, err?.message || err);
+                return false;
+              }
+            }
+
+            const ok = await tryStreamModel(selectedModel);
+            if (!ok) {
+              if (selectedModel !== FALLBACK_MODEL) {
+                console.warn(`[Trace] Falling back to ${FALLBACK_MODEL}`);
+                const fallbackOk = await tryStreamModel(FALLBACK_MODEL);
+                if (!fallbackOk) {
+                  enqueue('\n\n*Could not reach AI inference endpoint. Please try again.*');
+                }
+              } else {
+                enqueue('\n\n*Could not reach AI inference endpoint. Please try again.*');
+              }
             }
           } catch (e: any) {
             console.error('Agentic stream error:', e.message || e);
@@ -254,7 +284,8 @@ CRITICAL RAG GROUNDING & KNOWLEDGE RULES:
       return new Response(stream, {
         headers: {
           'Content-Type': 'text/plain; charset=utf-8',
-          'Cache-Control': 'no-store, no-cache, must-revalidate',
+          'Cache-Control': 'no-store, no-cache, must-revalidate, max-age=0',
+          'Connection': 'keep-alive',
           'X-Accel-Buffering': 'no',
           'Transfer-Encoding': 'chunked',
         },
@@ -281,7 +312,7 @@ ${context || 'No web sources were retrieved.'}`;
         : [{ role: 'user' as const, content: currentQuery }];
 
       const aiResult = await streamText({
-        model: nvidiaClient.chat('meta/llama-3.1-70b-instruct'),
+        model: nvidiaClient.chat(selectedModel),
         system: systemPrompt,
         messages: formattedMessages,
         maxOutputTokens: 200,

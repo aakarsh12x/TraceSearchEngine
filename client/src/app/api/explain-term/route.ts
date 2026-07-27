@@ -33,7 +33,7 @@ INSTRUCTIONS:
 3. Be direct, precise, and developer-focused. Keep response under 150 words.`;
 
     const aiResult = await streamText({
-      model: nvidiaClient.chat('meta/llama-3.1-70b-instruct'),
+      model: nvidiaClient.chat(process.env.NVIDIA_MODEL || 'meta/llama-3.1-70b-instruct'),
       system: systemPrompt,
       messages: [{ role: 'user', content: `Explain term: ${term}` }],
       maxOutputTokens: 250,
