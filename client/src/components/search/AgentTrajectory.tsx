@@ -218,12 +218,10 @@ const AGENT_THOUGHT_STEPS = [
 export function AgentTrajectory({
   completion, isAILoading, searchMode, onSelectFollowUp, onInspectConcept
 }: AgentTrajectoryProps) {
-  // ── Debounce markdown rendering to ~60fps to avoid O(n²) re-parses ──────────
-  // Status/step tokens are read from the raw stream immediately for snappy UI.
-  // The heavy ReactMarkdown render is deferred via rAF batching.
   const [deferredCompletion, setDeferredCompletion] = useState(completion);
-  const rafRef = useRef<number | null>(null);
-  const pendingRef = useRef(completion);
+  const targetCompletionRef = useRef(completion);
+  const currentLenRef = useRef(completion.length);
+  const animFrameRef = useRef<number | null>(null);
 
   // Dynamic step rotator to keep user engaged while agent processes
   const [dynamicStepIndex, setDynamicStepIndex] = useState(0);
@@ -235,29 +233,53 @@ export function AgentTrajectory({
     }
     const interval = setInterval(() => {
       setDynamicStepIndex((prev) => (prev + 1) % AGENT_THOUGHT_STEPS.length);
-    }, 1500);
+    }, 1400);
 
     return () => clearInterval(interval);
   }, [isAILoading]);
 
   useEffect(() => {
-    pendingRef.current = completion;
-    if (rafRef.current !== null) return; // already scheduled
-    rafRef.current = requestAnimationFrame(() => {
-      rafRef.current = null;
-      setDeferredCompletion(pendingRef.current);
-    });
+    targetCompletionRef.current = completion;
   }, [completion]);
 
-  // Flush immediately when loading finishes so the final text renders at once
+  // ── Smooth Character Interpolator (Pacing Engine) ───────────────────────────
+  // Smooths out bursty TCP network packets from cloud AI APIs into a fluid, 60fps continuous stream
   useEffect(() => {
     if (!isAILoading) {
-      if (rafRef.current !== null) {
-        cancelAnimationFrame(rafRef.current);
-        rafRef.current = null;
+      if (animFrameRef.current !== null) {
+        cancelAnimationFrame(animFrameRef.current);
+        animFrameRef.current = null;
       }
+      currentLenRef.current = completion.length;
       setDeferredCompletion(completion);
+      return;
     }
+
+    const tick = () => {
+      const target = targetCompletionRef.current;
+      const targetLen = target.length;
+      let curr = currentLenRef.current;
+
+      if (curr < targetLen) {
+        const diff = targetLen - curr;
+        // Dynamic pacing: catch up smoothly on large bursts, flow 2-5 chars/frame on close stream
+        const step = diff > 200 ? Math.ceil(diff / 5) : diff > 50 ? Math.ceil(diff / 3) : Math.min(diff, Math.max(2, Math.ceil(diff / 2)));
+        curr += step;
+        currentLenRef.current = curr;
+        setDeferredCompletion(target.slice(0, curr));
+      }
+
+      animFrameRef.current = requestAnimationFrame(tick);
+    };
+
+    animFrameRef.current = requestAnimationFrame(tick);
+
+    return () => {
+      if (animFrameRef.current !== null) {
+        cancelAnimationFrame(animFrameRef.current);
+        animFrameRef.current = null;
+      }
+    };
   }, [isAILoading, completion]);
 
   // Read latest live status from stream
@@ -274,7 +296,7 @@ export function AgentTrajectory({
     return m ? m[1].trim() : '';
   }, [completion]);
 
-  // Full parse (sources, markdown, followUps) only runs on debounced value
+  // Full parse (sources, markdown, followUps) runs on smoothly interpolated value
   const { sources, followUps, concepts, markdown } = useMemo(
     () => parseAgentCompletion(deferredCompletion || ''),
     [deferredCompletion]
@@ -282,12 +304,12 @@ export function AgentTrajectory({
 
   const isAgentic = searchMode === 'agentic';
 
-  // Determine current active loading message — prioritizes backend updates, cycles dynamic thoughts otherwise
+  // Dynamic status text — alternates smoothly between current backend status and engaging thought steps
   const displayStatus = useMemo(() => {
-    if (latestLiveStatus) return latestLiveStatus;
-    if (liveStep === 'synthesizing') return 'Synthesizing answer…';
-    return AGENT_THOUGHT_STEPS[dynamicStepIndex];
-  }, [latestLiveStatus, liveStep, dynamicStepIndex]);
+    const currentThought = AGENT_THOUGHT_STEPS[dynamicStepIndex];
+    if (latestLiveStatus && dynamicStepIndex % 2 === 0) return latestLiveStatus;
+    return currentThought;
+  }, [latestLiveStatus, dynamicStepIndex]);
 
   return (
     <div className="w-full space-y-5">
