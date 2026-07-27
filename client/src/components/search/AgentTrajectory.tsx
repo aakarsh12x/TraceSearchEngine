@@ -311,6 +311,25 @@ export function AgentTrajectory({
     return currentThought;
   }, [latestLiveStatus, dynamicStepIndex]);
 
+  // Memoize markdown component overrides so React does NOT unmount/remount code blocks & links on every frame
+  const markdownComponents = useMemo(() => ({
+    code: (props: any) => <CodeBlock {...props} isAILoading={isAILoading} onInspectConcept={onInspectConcept} />,
+    a: ({ href, children }: any) => (
+      <a
+        href={href}
+        target="_blank"
+        rel="noopener noreferrer"
+        className="no-underline text-zinc-500 hover:text-zinc-200 transition-colors
+                   font-mono text-[10px] align-super leading-none
+                   border border-zinc-800 hover:border-zinc-600
+                   bg-zinc-900 hover:bg-zinc-800
+                   px-1 py-px rounded"
+      >
+        {children}
+      </a>
+    ),
+  }), [isAILoading, onInspectConcept]);
+
   return (
     <div className="w-full space-y-5">
 
@@ -434,27 +453,14 @@ export function AgentTrajectory({
               'prose-hr:border-zinc-800',
             ].join(' ')}
           >
-            <ReactMarkdown
-              components={{
-                code: (props) => <CodeBlock {...props} isAILoading={isAILoading} onInspectConcept={onInspectConcept} />,
-                a: ({ href, children }) => (
-                  <a
-                    href={href}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="no-underline text-zinc-500 hover:text-zinc-200 transition-colors
-                               font-mono text-[10px] align-super leading-none
-                               border border-zinc-800 hover:border-zinc-600
-                               bg-zinc-900 hover:bg-zinc-800
-                               px-1 py-px rounded"
-                  >
-                    {children}
-                  </a>
-                ),
-              }}
-            >
+            <ReactMarkdown components={markdownComponents}>
               {markdown}
             </ReactMarkdown>
+
+            {/* Pulsing cursor indicator while model is actively streaming markdown */}
+            {isAILoading && (
+              <span className="inline-block w-2 h-4 ml-1 rounded-sm bg-teal-400/80 animate-pulse vertical-middle" />
+            )}
 
             {/* AI Follow-Up Flashcards */}
             {followUps.length > 0 && (
