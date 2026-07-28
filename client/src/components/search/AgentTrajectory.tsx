@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useRef, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import ReactMarkdown from 'react-markdown';
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
@@ -218,11 +218,6 @@ const AGENT_THOUGHT_STEPS = [
 export function AgentTrajectory({
   completion, isAILoading, searchMode, onSelectFollowUp, onInspectConcept
 }: AgentTrajectoryProps) {
-  const [deferredCompletion, setDeferredCompletion] = useState(completion);
-  const targetCompletionRef = useRef(completion);
-  const currentLenRef = useRef(completion.length);
-  const animFrameRef = useRef<number | null>(null);
-
   // Dynamic step rotator to keep user engaged while agent processes
   const [dynamicStepIndex, setDynamicStepIndex] = useState(0);
 
@@ -238,50 +233,6 @@ export function AgentTrajectory({
     return () => clearInterval(interval);
   }, [isAILoading]);
 
-  useEffect(() => {
-    targetCompletionRef.current = completion;
-  }, [completion]);
-
-  // ── Smooth Character Interpolator (Pacing Engine) ───────────────────────────
-  // Smooths out bursty TCP network packets from cloud AI APIs into a fluid, 60fps continuous stream
-  useEffect(() => {
-    if (!isAILoading) {
-      if (animFrameRef.current !== null) {
-        cancelAnimationFrame(animFrameRef.current);
-        animFrameRef.current = null;
-      }
-      currentLenRef.current = completion.length;
-      setDeferredCompletion(completion);
-      return;
-    }
-
-    const tick = () => {
-      const target = targetCompletionRef.current;
-      const targetLen = target.length;
-      let curr = currentLenRef.current;
-
-      if (curr < targetLen) {
-        const diff = targetLen - curr;
-        // Dynamic pacing: catch up smoothly on large bursts, flow 2-5 chars/frame on close stream
-        const step = diff > 200 ? Math.ceil(diff / 5) : diff > 50 ? Math.ceil(diff / 3) : Math.min(diff, Math.max(2, Math.ceil(diff / 2)));
-        curr += step;
-        currentLenRef.current = curr;
-        setDeferredCompletion(target.slice(0, curr));
-      }
-
-      animFrameRef.current = requestAnimationFrame(tick);
-    };
-
-    animFrameRef.current = requestAnimationFrame(tick);
-
-    return () => {
-      if (animFrameRef.current !== null) {
-        cancelAnimationFrame(animFrameRef.current);
-        animFrameRef.current = null;
-      }
-    };
-  }, [isAILoading, completion]);
-
   // Read latest live status from stream
   const liveStatusMatches = useMemo(() => {
     return Array.from(completion.matchAll(/\[\[STATUS:([^\]]+)\]\]/g)).map(m => m[1].trim());
@@ -296,10 +247,10 @@ export function AgentTrajectory({
     return m ? m[1].trim() : '';
   }, [completion]);
 
-  // Full parse (sources, markdown, followUps) runs on smoothly interpolated value
+  // Full parse (sources, markdown, followUps) runs directly on the live streaming completion string
   const { sources, followUps, concepts, markdown } = useMemo(
-    () => parseAgentCompletion(deferredCompletion || ''),
-    [deferredCompletion]
+    () => parseAgentCompletion(completion || ''),
+    [completion]
   );
 
   const isAgentic = searchMode === 'agentic';
@@ -456,11 +407,6 @@ export function AgentTrajectory({
             <ReactMarkdown components={markdownComponents}>
               {markdown}
             </ReactMarkdown>
-
-            {/* Pulsing cursor indicator while model is actively streaming markdown */}
-            {isAILoading && (
-              <span className="inline-block w-2 h-4 ml-1 rounded-sm bg-teal-400/80 animate-pulse vertical-middle" />
-            )}
 
             {/* AI Follow-Up Flashcards */}
             {followUps.length > 0 && (

@@ -116,7 +116,7 @@ export async function POST(req: Request) {
     const apiKey = process.env.NVIDIA_KEY;
     if (!apiKey) return new Response('NVIDIA_KEY environment variable is not set', { status: 500 });
 
-    const selectedModel = process.env.NVIDIA_MODEL || 'meta/llama-3.1-70b-instruct';
+    const selectedModel = process.env.NVIDIA_MODEL || 'meta/llama-3.1-8b-instruct';
 
     const nvidiaClient = createOpenAI({
       baseURL: 'https://integrate.api.nvidia.com/v1',
@@ -234,10 +234,14 @@ CRITICAL RAG GROUNDING & KNOWLEDGE RULES:
                 }))
               : [{ role: 'user' as const, content: currentQuery }];
 
-            // Step 6: Stream LLM synthesis — simple, safe pattern that worked before.
-            // tryStreamModel fully encapsulates the stream so errors from reader.read()
-            // are caught at the same scope as the streamText call.
-            const FALLBACK_MODEL = 'meta/llama-3.1-70b-instruct';
+            // Step 6: Stream LLM synthesis with robust multi-tier fallback chain
+            const MODEL_CHAIN = Array.from(new Set([
+              selectedModel,
+              'meta/llama-3.1-8b-instruct',
+              'meta/llama-3.3-70b-instruct',
+              'meta/llama-3.1-70b-instruct',
+              'mistralai/mistral-7b-instruct-v0.3',
+            ]));
 
             async function tryStreamModel(modelId: string): Promise<boolean> {
               try {
@@ -249,29 +253,31 @@ CRITICAL RAG GROUNDING & KNOWLEDGE RULES:
                   abortSignal: req.signal,
                 });
                 const reader = aiResult.textStream.getReader();
+                let hasYieldedText = false;
                 while (true) {
                   const { done, value } = await reader.read();
                   if (done) break;
-                  enqueue(value);
+                  if (value) {
+                    enqueue(value);
+                    hasYieldedText = true;
+                  }
                 }
-                return true;
+                return hasYieldedText;
               } catch (err: any) {
                 console.error(`[Trace] Model ${modelId} failed:`, err?.message || err);
                 return false;
               }
             }
 
-            const ok = await tryStreamModel(selectedModel);
-            if (!ok) {
-              if (selectedModel !== FALLBACK_MODEL) {
-                console.warn(`[Trace] Falling back to ${FALLBACK_MODEL}`);
-                const fallbackOk = await tryStreamModel(FALLBACK_MODEL);
-                if (!fallbackOk) {
-                  enqueue('\n\n*Could not reach AI inference endpoint. Please try again.*');
-                }
-              } else {
-                enqueue('\n\n*Could not reach AI inference endpoint. Please try again.*');
-              }
+            let success = false;
+            for (const modelId of MODEL_CHAIN) {
+              success = await tryStreamModel(modelId);
+              if (success) break;
+              console.warn(`[Trace] Model ${modelId} yielded no text or failed. Trying next model in chain...`);
+            }
+
+            if (!success) {
+              enqueue('\n\n*Could not reach AI inference endpoint. Please try again.*');
             }
           } catch (e: any) {
             console.error('Agentic stream error:', e.message || e);
